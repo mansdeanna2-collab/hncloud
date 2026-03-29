@@ -1,0 +1,2554 @@
+<template>
+  <div class="page-container">
+    <el-container>
+      <el-header class="header-container">
+        <div class="header-logo">
+          <el-icon :size="30">
+            <Monitor />
+          </el-icon>
+          <h2>服务器管理</h2>
+        </div>
+        <el-menu
+          mode="horizontal"
+          :default-active="activeMenu"
+          background-color="transparent"
+          text-color="#fff"
+          active-text-color="#fff"
+          class="header-menu"
+          @select="handleMenuSelect"
+        >
+          <el-menu-item index="/dashboard">
+            <el-icon><Odometer /></el-icon>
+            仪表盘
+          </el-menu-item>
+          <el-menu-item index="/servers">
+            <el-icon><OfficeBuilding /></el-icon>
+            服务器
+          </el-menu-item>
+          <el-sub-menu index="main-program">
+            <template #title>
+              <el-icon><Setting /></el-icon>
+              主程序功能
+            </template>
+            <el-menu-item index="/information-query">
+              <el-icon><Search /></el-icon>
+              信息查询
+            </el-menu-item>
+            <el-menu-item index="/system-backup">
+              <el-icon><FolderOpened /></el-icon>
+              系统备份
+            </el-menu-item>
+            <el-menu-item index="/system-settings">
+              <el-icon><Tools /></el-icon>
+              系统设置
+            </el-menu-item>
+          </el-sub-menu>
+        </el-menu>
+        <el-dropdown @command="handleCommand">
+          <span class="user-dropdown">
+            <el-icon><User /></el-icon>
+            {{ currentUser?.username || '管理员' }}
+            <el-icon><ArrowDown /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="changePassword">
+                修改密码
+              </el-dropdown-item>
+              <el-dropdown-item command="logout">
+                退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </el-header>
+      
+      <el-main class="main-content">
+        <div class="content-wrapper">
+          <el-card class="settings-card">
+            <template #header>
+              <div class="card-header">
+                <div class="card-header-title">
+                  <el-icon
+                    class="card-header-icon"
+                    :size="20"
+                  >
+                    <Tools />
+                  </el-icon>
+                  <span>系统设置</span>
+                </div>
+                <div class="card-header-buttons">
+                  <el-button
+                    type="default"
+                    @click="goBack"
+                  >
+                    <el-icon><Back /></el-icon>
+                    返回仪表盘
+                  </el-button>
+                </div>
+              </div>
+            </template>
+            
+            <div class="settings-content">
+              <el-row :gutter="24">
+                <!-- 左侧垂直菜单 -->
+                <el-col :span="6">
+                  <el-menu
+                    :default-active="activeSettingMenu"
+                    class="settings-menu"
+                    @select="handleSettingMenuSelect"
+                  >
+                    <el-menu-item index="whitelist">
+                      <el-icon><Lock /></el-icon>
+                      <span>登录白名单</span>
+                    </el-menu-item>
+                    <el-menu-item index="totp">
+                      <el-icon><Iphone /></el-icon>
+                      <span>谷歌验证</span>
+                    </el-menu-item>
+                    <el-menu-item index="ssl">
+                      <el-icon><Key /></el-icon>
+                      <span>SSL设置</span>
+                    </el-menu-item>
+                    <el-menu-item index="logs">
+                      <el-icon><Document /></el-icon>
+                      <span>查看系统日志</span>
+                    </el-menu-item>
+                    <el-menu-item index="version">
+                      <el-icon><Upload /></el-icon>
+                      <span>检测代码升级</span>
+                    </el-menu-item>
+                  </el-menu>
+                </el-col>
+                
+                <!-- 右侧内容区 -->
+                <el-col :span="18">
+                  <!-- 登录白名单设置 -->
+                  <div
+                    v-if="activeSettingMenu === 'whitelist'"
+                    class="setting-panel"
+                  >
+                    <h3 class="setting-title">
+                      <el-icon><Lock /></el-icon>
+                      登录白名单设置
+                    </h3>
+                    <el-alert
+                      type="warning"
+                      :closable="false"
+                      show-icon
+                      class="setting-alert"
+                    >
+                      <template #title>
+                        注意：启用白名单后，不在列表中的IP将无法登录系统。请确保当前IP已添加到白名单中。
+                      </template>
+                    </el-alert>
+                    <el-form
+                      :model="whitelistForm"
+                      label-width="120px"
+                    >
+                      <el-form-item label="启用白名单">
+                        <el-switch
+                          v-model="whitelistForm.enabled"
+                          :active-text="whitelistForm.enabled ? '已启用' : ''"
+                          :inactive-text="!whitelistForm.enabled ? '未启用' : ''"
+                        />
+                        <span class="form-tip">启用后，只有白名单中的IP地址可以登录系统</span>
+                      </el-form-item>
+                      <el-form-item label="IP白名单">
+                        <div class="ip-list-container">
+                          <div
+                            v-for="(ip, index) in whitelistForm.ip_list"
+                            :key="index"
+                            class="ip-item"
+                          >
+                            <el-input
+                              v-model="whitelistForm.ip_list[index]"
+                              placeholder="请输入IP地址，如: 192.168.1.1"
+                              :class="{ 'is-valid': isValidIp(ip), 'is-invalid': ip && !isValidIp(ip) }"
+                            >
+                              <template #suffix>
+                                <el-icon
+                                  v-if="ip && isValidIp(ip)"
+                                  class="valid-icon"
+                                >
+                                  <CircleCheck />
+                                </el-icon>
+                                <el-icon
+                                  v-else-if="ip && !isValidIp(ip)"
+                                  class="invalid-icon"
+                                >
+                                  <CircleClose />
+                                </el-icon>
+                              </template>
+                            </el-input>
+                            <el-tooltip
+                              v-if="ip && !isValidIp(ip)"
+                              content="无效的IP地址格式"
+                              placement="top"
+                            >
+                              <el-button
+                                type="warning"
+                                :icon="Warning"
+                                circle
+                                size="small"
+                              />
+                            </el-tooltip>
+                            <el-button
+                              type="danger"
+                              :icon="Delete"
+                              circle
+                              @click="removeWhitelistIp(index)"
+                            />
+                          </div>
+                          <div class="ip-actions">
+                            <el-button
+                              type="primary"
+                              @click="addWhitelistIp"
+                            >
+                              <el-icon><Plus /></el-icon>
+                              添加IP
+                            </el-button>
+                            <span class="ip-count">
+                              共 {{ validIpCount }} 个有效IP
+                            </span>
+                          </div>
+                        </div>
+                      </el-form-item>
+                      <el-form-item>
+                        <el-button
+                          type="primary"
+                          :loading="savingSettings"
+                          :disabled="whitelistForm.enabled && validIpCount === 0"
+                          @click="saveWhitelistSettings"
+                        >
+                          <el-icon><Check /></el-icon>
+                          保存设置
+                        </el-button>
+                        <el-tooltip
+                          v-if="whitelistForm.enabled && validIpCount === 0"
+                          content="启用白名单时至少需要一个有效的IP地址"
+                          placement="top"
+                        >
+                          <el-icon class="tip-icon">
+                            <InfoFilled />
+                          </el-icon>
+                        </el-tooltip>
+                      </el-form-item>
+                    </el-form>
+                  </div>
+                  
+                  <!-- 谷歌验证设置 -->
+                  <div
+                    v-if="activeSettingMenu === 'totp'"
+                    class="setting-panel"
+                  >
+                    <h3 class="setting-title">
+                      <el-icon><Iphone /></el-icon>
+                      谷歌验证（两步验证）
+                    </h3>
+                    <el-alert
+                      type="info"
+                      :closable="false"
+                      show-icon
+                      class="setting-alert"
+                    >
+                      <template #title>
+                        启用谷歌验证后，登录时除了密码还需要输入Google Authenticator生成的6位验证码，大大增强账户安全性。
+                      </template>
+                    </el-alert>
+                    
+                    <!-- 当前状态 -->
+                    <div class="totp-status-section">
+                      <div class="totp-status">
+                        <span class="status-label">当前状态：</span>
+                        <el-tag
+                          :type="totpForm.enabled ? 'success' : 'info'"
+                          size="large"
+                        >
+                          {{ totpForm.enabled ? '已启用' : '未启用' }}
+                        </el-tag>
+                      </div>
+                    </div>
+                    
+                    <!-- 设置流程 -->
+                    <div
+                      v-if="!totpForm.enabled"
+                      class="totp-setup-section"
+                    >
+                      <el-steps
+                        :active="totpSetupStep"
+                        finish-status="success"
+                        class="totp-steps"
+                      >
+                        <el-step title="生成密钥" />
+                        <el-step title="扫描二维码" />
+                        <el-step title="验证并启用" />
+                      </el-steps>
+                      
+                      <!-- 步骤1: 生成密钥 -->
+                      <div
+                        v-if="totpSetupStep === 0"
+                        class="totp-step-content"
+                      >
+                        <p>点击下方按钮生成谷歌验证密钥：</p>
+                        <el-button
+                          type="primary"
+                          :loading="totpLoading"
+                          @click="handleSetupTotp"
+                        >
+                          <el-icon><Setting /></el-icon>
+                          生成密钥
+                        </el-button>
+                      </div>
+                      
+                      <!-- 步骤2: 显示二维码 -->
+                      <div
+                        v-if="totpSetupStep === 1"
+                        class="totp-step-content"
+                      >
+                        <p>请使用Google Authenticator扫描以下二维码：</p>
+                        <div class="qr-code-container">
+                          <img
+                            v-if="totpQrDataUrl"
+                            :src="totpQrDataUrl"
+                            alt="TOTP QR Code"
+                            class="qr-code-image"
+                          >
+                          <div
+                            v-else
+                            class="qr-code-placeholder"
+                          >
+                            <el-icon :size="60">
+                              <Picture />
+                            </el-icon>
+                            <p>正在生成二维码...</p>
+                          </div>
+                        </div>
+                        <div class="secret-key-section">
+                          <p>或者手动输入以下密钥：</p>
+                          <el-input
+                            v-model="totpForm.secret"
+                            readonly
+                            class="secret-key-input"
+                          >
+                            <template #append>
+                              <el-button @click="copySecretKey">
+                                <el-icon><CopyDocument /></el-icon>
+                                复制
+                              </el-button>
+                            </template>
+                          </el-input>
+                        </div>
+                        <el-button
+                          type="primary"
+                          @click="totpSetupStep = 2"
+                        >
+                          下一步
+                        </el-button>
+                      </div>
+                      
+                      <!-- 步骤3: 验证并启用 -->
+                      <div
+                        v-if="totpSetupStep === 2"
+                        class="totp-step-content"
+                      >
+                        <p>请输入Google Authenticator显示的6位验证码：</p>
+                        <el-input
+                          v-model="totpForm.verificationCode"
+                          placeholder="请输入6位验证码"
+                          maxlength="6"
+                          class="verification-code-input"
+                          @keyup.enter="handleEnableTotp"
+                        />
+                        <div class="totp-actions">
+                          <el-button @click="totpSetupStep = 1">
+                            上一步
+                          </el-button>
+                          <el-button
+                            type="success"
+                            :loading="totpLoading"
+                            @click="handleEnableTotp"
+                          >
+                            <el-icon><CircleCheck /></el-icon>
+                            验证并启用
+                          </el-button>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <!-- 已启用状态 - 禁用选项 -->
+                    <div
+                      v-else
+                      class="totp-enabled-section"
+                    >
+                      <el-alert
+                        type="success"
+                        :closable="false"
+                        show-icon
+                        class="setting-alert"
+                      >
+                        <template #title>
+                          谷歌验证已启用，您的账户受到两步验证保护。
+                        </template>
+                      </el-alert>
+                      
+                      <div class="disable-totp-section">
+                        <h4>禁用谷歌验证</h4>
+                        <p class="warning-text">
+                          <el-icon><Warning /></el-icon>
+                          禁用谷歌验证会降低账户安全性，请谨慎操作。
+                        </p>
+                        <el-input
+                          v-model="totpForm.disableCode"
+                          placeholder="请输入当前的6位验证码以禁用"
+                          maxlength="6"
+                          class="verification-code-input"
+                        />
+                        <el-button
+                          type="danger"
+                          :loading="totpLoading"
+                          @click="handleDisableTotp"
+                        >
+                          <el-icon><CircleClose /></el-icon>
+                          禁用谷歌验证
+                        </el-button>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <!-- SSL设置 -->
+                  <div
+                    v-if="activeSettingMenu === 'ssl'"
+                    class="setting-panel"
+                  >
+                    <h3 class="setting-title">
+                      <el-icon><Key /></el-icon>
+                      SSL设置
+                    </h3>
+                    <el-alert
+                      type="info"
+                      :closable="false"
+                      show-icon
+                      class="setting-alert"
+                    >
+                      <template #title>
+                        SSL证书用于加密HTTPS连接。可以选择自动配置或手动输入证书路径。
+                      </template>
+                    </el-alert>
+                    
+                    <!-- 自动配置区域 -->
+                    <div class="ssl-auto-config">
+                      <h4 class="sub-title">
+                        <el-icon><MagicStick /></el-icon>
+                        一键自动配置
+                      </h4>
+                      <el-form
+                        :model="sslAutoForm"
+                        label-width="120px"
+                      >
+                        <el-form-item label="服务器地址">
+                          <el-input
+                            v-model="sslAutoForm.address"
+                            placeholder="输入IP地址或域名，留空则自动检测"
+                            clearable
+                          >
+                            <template #prefix>
+                              <el-icon><Link /></el-icon>
+                            </template>
+                            <template #append>
+                              <el-button
+                                type="primary"
+                                :loading="detectingAddress"
+                                @click="handleDetectAddress"
+                              >
+                                <el-icon><Search /></el-icon>
+                                检测
+                              </el-button>
+                            </template>
+                          </el-input>
+                          <div class="address-info">
+                            <el-tag
+                              v-if="sslAutoForm.addressType"
+                              :type="sslAutoForm.addressType === 'ip' ? 'warning' : 'success'"
+                              size="small"
+                            >
+                              {{ sslAutoForm.addressType === 'ip' ? 'IP地址' : '域名' }}
+                            </el-tag>
+                            <span
+                              v-if="sslAutoForm.detectMessage"
+                              class="detect-message"
+                            >
+                              {{ sslAutoForm.detectMessage }}
+                            </span>
+                          </div>
+                        </el-form-item>
+                        <el-form-item>
+                          <el-button
+                            type="success"
+                            :loading="autoConfiguring"
+                            @click="handleAutoConfigureSSL"
+                          >
+                            <el-icon><Setting /></el-icon>
+                            一键自动配置SSL
+                          </el-button>
+                          <span class="form-tip">将自动生成自签名证书（有效期10年）</span>
+                        </el-form-item>
+                      </el-form>
+                    </div>
+                    
+                    <el-divider content-position="center">
+                      或者手动配置
+                    </el-divider>
+                    
+                    <!-- 手动配置区域 -->
+                    <el-form
+                      :model="sslForm"
+                      label-width="120px"
+                    >
+                      <el-form-item label="启用SSL">
+                        <el-switch
+                          v-model="sslForm.enabled"
+                          :active-text="sslForm.enabled ? '已启用' : ''"
+                          :inactive-text="!sslForm.enabled ? '未启用' : ''"
+                        />
+                        <span class="form-tip">启用HTTPS安全连接</span>
+                      </el-form-item>
+                      <el-form-item label="证书路径">
+                        <el-input
+                          v-model="sslForm.cert_path"
+                          placeholder="SSL证书文件路径，如: /etc/ssl/certs/server.crt"
+                          :disabled="!sslForm.enabled"
+                          :class="{ 'path-configured': sslForm.cert_path }"
+                        >
+                          <template #prefix>
+                            <el-icon><Document /></el-icon>
+                          </template>
+                          <template #suffix>
+                            <el-tag
+                              v-if="sslForm.cert_path"
+                              size="small"
+                              type="success"
+                            >
+                              已配置
+                            </el-tag>
+                          </template>
+                        </el-input>
+                        <div class="path-hint">
+                          支持 .crt, .pem, .cer 格式的证书文件
+                        </div>
+                      </el-form-item>
+                      <el-form-item label="私钥路径">
+                        <el-input
+                          v-model="sslForm.key_path"
+                          placeholder="SSL私钥文件路径，如: /etc/ssl/private/server.key"
+                          :disabled="!sslForm.enabled"
+                          :class="{ 'path-configured': sslForm.key_path }"
+                        >
+                          <template #prefix>
+                            <el-icon><Key /></el-icon>
+                          </template>
+                          <template #suffix>
+                            <el-tag
+                              v-if="sslForm.key_path"
+                              size="small"
+                              type="success"
+                            >
+                              已配置
+                            </el-tag>
+                          </template>
+                        </el-input>
+                        <div class="path-hint">
+                          支持 .key, .pem 格式的私钥文件
+                        </div>
+                      </el-form-item>
+                      <el-form-item>
+                        <el-button
+                          type="primary"
+                          :loading="savingSettings"
+                          :disabled="sslForm.enabled && (!sslForm.cert_path || !sslForm.key_path)"
+                          @click="saveSSLSettings"
+                        >
+                          <el-icon><Check /></el-icon>
+                          保存设置
+                        </el-button>
+                        <el-button
+                          v-if="sslForm.cert_path && sslForm.key_path"
+                          type="info"
+                          :loading="verifyingCert"
+                          @click="handleVerifyCertificate"
+                        >
+                          <el-icon><CircleCheck /></el-icon>
+                          验证证书
+                        </el-button>
+                        <el-tooltip
+                          v-if="sslForm.enabled && (!sslForm.cert_path || !sslForm.key_path)"
+                          content="启用SSL时需要配置证书和私钥路径"
+                          placement="top"
+                        >
+                          <el-icon class="tip-icon">
+                            <InfoFilled />
+                          </el-icon>
+                        </el-tooltip>
+                      </el-form-item>
+                    </el-form>
+                    
+                    <!-- 证书信息 -->
+                    <div
+                      v-if="sslForm.auto_generated"
+                      class="cert-info"
+                    >
+                      <el-tag
+                        type="warning"
+                        size="large"
+                      >
+                        自动生成的自签名证书
+                      </el-tag>
+                      <span
+                        v-if="sslForm.address"
+                        class="cert-address"
+                      >
+                        地址: {{ sslForm.address }}
+                      </span>
+                    </div>
+                  </div>
+                  
+                  <!-- 系统日志 -->
+                  <div
+                    v-if="activeSettingMenu === 'logs'"
+                    class="setting-panel"
+                  >
+                    <h3 class="setting-title">
+                      <el-icon><Document /></el-icon>
+                      系统日志
+                    </h3>
+                    <div class="log-description">
+                      <p>系统日志记录了用户登录、服务器操作、系统设置等重要操作。</p>
+                    </div>
+                    <div class="log-actions">
+                      <el-button
+                        type="primary"
+                        :loading="loadingLogs"
+                        @click="viewSystemLogs"
+                      >
+                        <el-icon><View /></el-icon>
+                        查看完整日志
+                      </el-button>
+                    </div>
+                    
+                    <!-- 日志统计 -->
+                    <div
+                      v-if="logStats.total > 0"
+                      class="log-stats"
+                    >
+                      <h4>日志统计</h4>
+                      <div class="stats-grid">
+                        <div class="stat-item">
+                          <span class="stat-label">总日志数</span>
+                          <span class="stat-value">{{ logStats.total }}</span>
+                        </div>
+                        <div
+                          v-for="(count, type) in logStats.by_type"
+                          :key="type"
+                          class="stat-item"
+                        >
+                          <span class="stat-label">{{ getLogTypeLabel(type) }}</span>
+                          <span class="stat-value">{{ count }}</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <!-- 最近日志预览 -->
+                    <div
+                      v-if="recentLogs.length > 0"
+                      class="recent-logs"
+                    >
+                      <h4>最近操作</h4>
+                      <div class="log-list">
+                        <div
+                          v-for="log in recentLogs"
+                          :key="log.id"
+                          class="log-item"
+                          :class="['log-' + log.status]"
+                        >
+                          <div class="log-item-header">
+                            <el-tag
+                              :type="getLogStatusType(log.status)"
+                              size="small"
+                            >
+                              {{ getLogTypeLabel(log.log_type) }}
+                            </el-tag>
+                            <span class="log-time">{{ formatDateTime(log.created_at) }}</span>
+                          </div>
+                          <div class="log-item-body">
+                            <span class="log-action">{{ log.action }}</span>
+                            <span
+                              v-if="log.target"
+                              class="log-target"
+                            >
+                              → {{ log.target }}
+                            </span>
+                          </div>
+                          <div class="log-item-footer">
+                            <span
+                              v-if="log.username"
+                              class="log-user"
+                            >
+                              <el-icon><User /></el-icon>
+                              {{ log.username }}
+                            </span>
+                            <span
+                              v-if="log.ip_address"
+                              class="log-ip"
+                            >
+                              <el-icon><Monitor /></el-icon>
+                              {{ log.ip_address }}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <el-empty
+                      v-else-if="!loadingLogs"
+                      description="暂无日志记录"
+                    />
+                  </div>
+                  
+                  <!-- 检测代码升级 -->
+                  <div
+                    v-if="activeSettingMenu === 'version'"
+                    class="setting-panel"
+                  >
+                    <h3 class="setting-title">
+                      <el-icon><Upload /></el-icon>
+                      检测代码升级
+                    </h3>
+                    <el-alert
+                      type="info"
+                      :closable="false"
+                      show-icon
+                      class="setting-alert"
+                    >
+                      <template #title>
+                        检测是否有新版本可用。更新日志和新功能将从GitHub仓库获取。
+                      </template>
+                    </el-alert>
+                    
+                    <!-- 当前版本信息 -->
+                    <div class="version-info-section">
+                      <div class="version-current">
+                        <div class="version-label">
+                          当前版本
+                        </div>
+                        <div class="version-value">
+                          <el-tag
+                            type="primary"
+                            size="large"
+                          >
+                            v{{ versionInfo.current_version || '加载中...' }}
+                          </el-tag>
+                        </div>
+                      </div>
+                      
+                      <div
+                        v-if="versionInfo.github_url"
+                        class="version-github"
+                      >
+                        <el-link
+                          :href="versionInfo.github_url"
+                          target="_blank"
+                          type="primary"
+                        >
+                          <el-icon><Link /></el-icon>
+                          GitHub仓库
+                        </el-link>
+                      </div>
+                    </div>
+                    
+                    <!-- 检查更新按钮 -->
+                    <div class="version-check-section">
+                      <el-button
+                        type="primary"
+                        :loading="checkingUpdate"
+                        @click="handleCheckForUpdates"
+                      >
+                        <el-icon><Refresh /></el-icon>
+                        检查更新
+                      </el-button>
+                    </div>
+                    
+                    <!-- 更新检查结果 -->
+                    <div
+                      v-if="updateCheckResult"
+                      class="version-result-section"
+                    >
+                      <el-result
+                        v-if="updateCheckResult.has_update"
+                        icon="warning"
+                        title="发现新版本"
+                        :sub-title="`最新版本: v${updateCheckResult.latest_version}`"
+                      >
+                        <template #extra>
+                          <div class="update-details">
+                            <div
+                              v-if="updateCheckResult.published_at"
+                              class="update-date"
+                            >
+                              <el-icon><Calendar /></el-icon>
+                              发布时间: {{ formatDateTime(updateCheckResult.published_at) }}
+                            </div>
+                            <div
+                              v-if="updateCheckResult.release_notes"
+                              class="update-notes"
+                            >
+                              <h4>更新日志</h4>
+                              <pre class="release-notes-content">{{ updateCheckResult.release_notes }}</pre>
+                            </div>
+                            <el-button
+                              v-if="updateCheckResult.release_url"
+                              type="primary"
+                              @click="openReleaseUrl(updateCheckResult.release_url)"
+                            >
+                              <el-icon><Link /></el-icon>
+                              查看发布页面
+                            </el-button>
+                          </div>
+                        </template>
+                      </el-result>
+                      
+                      <el-result
+                        v-else-if="updateCheckResult.success"
+                        icon="success"
+                        title="已是最新版本"
+                        :sub-title="`当前版本 v${updateCheckResult.current_version} 已是最新版本`"
+                      />
+                      
+                      <el-result
+                        v-else
+                        icon="error"
+                        title="检查更新失败"
+                        :sub-title="updateCheckResult.message"
+                      >
+                        <template #extra>
+                          <el-button
+                            type="primary"
+                            @click="handleCheckForUpdates"
+                          >
+                            重试
+                          </el-button>
+                        </template>
+                      </el-result>
+                    </div>
+                  </div>
+                </el-col>
+              </el-row>
+            </div>
+          </el-card>
+        </div>
+      </el-main>
+    </el-container>
+    
+    <!-- Change Password Dialog -->
+    <el-dialog
+      v-model="passwordDialogVisible"
+      title="修改密码"
+      width="400px"
+    >
+      <el-form
+        ref="passwordFormRef"
+        :model="passwordForm"
+        :rules="passwordRules"
+        label-width="80px"
+      >
+        <el-form-item
+          label="旧密码"
+          prop="old_password"
+        >
+          <el-input
+            v-model="passwordForm.old_password"
+            type="password"
+            placeholder="请输入旧密码"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item
+          label="新密码"
+          prop="new_password"
+        >
+          <el-input
+            v-model="passwordForm.new_password"
+            type="password"
+            placeholder="请输入新密码（至少6位）"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item
+          label="确认密码"
+          prop="confirm_password"
+        >
+          <el-input
+            v-model="passwordForm.confirm_password"
+            type="password"
+            placeholder="请再次输入新密码"
+            show-password
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="changingPassword"
+          @click="handleChangePassword"
+        >
+          确认修改
+        </el-button>
+      </template>
+    </el-dialog>
+    
+    <!-- System Logs Dialog -->
+    <el-dialog
+      v-model="logsDialogVisible"
+      title="系统操作日志"
+      width="1100px"
+      top="3vh"
+      :close-on-click-modal="false"
+    >
+      <div class="logs-dialog-content">
+        <!-- 筛选工具栏 -->
+        <div class="logs-toolbar">
+          <el-select
+            v-model="logTypeFilter"
+            placeholder="日志类型"
+            clearable
+            style="width: 150px;"
+            @change="filterLogs"
+          >
+            <el-option
+              v-for="type in logTypes"
+              :key="type.value"
+              :label="type.label"
+              :value="type.value"
+            />
+          </el-select>
+          <el-select
+            v-model="logStatusFilter"
+            placeholder="状态"
+            clearable
+            style="width: 120px; margin-left: 10px;"
+            @change="filterLogs"
+          >
+            <el-option
+              label="成功"
+              value="success"
+            />
+            <el-option
+              label="失败"
+              value="failed"
+            />
+            <el-option
+              label="警告"
+              value="warning"
+            />
+          </el-select>
+          <el-button
+            type="primary"
+            :loading="loadingLogs"
+            style="margin-left: auto;"
+            @click="refreshLogs"
+          >
+            <el-icon><Refresh /></el-icon>
+            刷新
+          </el-button>
+        </div>
+        
+        <!-- 日志列表 -->
+        <div
+          v-if="loadingLogs"
+          class="loading-container"
+        >
+          <el-icon
+            class="loading-icon"
+            :size="40"
+          >
+            <Loading />
+          </el-icon>
+          <p class="loading-text">
+            正在加载日志...
+          </p>
+        </div>
+        
+        <el-table
+          v-else
+          :data="systemLogs"
+          stripe
+          border
+          size="small"
+          max-height="500"
+          style="width: 100%;"
+        >
+          <el-table-column
+            prop="created_at"
+            label="时间"
+            width="180"
+          >
+            <template #default="scope">
+              <span class="log-time-cell">{{ formatDateTime(scope.row.created_at) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="log_type"
+            label="类型"
+            width="120"
+            align="center"
+          >
+            <template #default="scope">
+              <el-tag
+                :type="getLogTypeColor(scope.row.log_type)"
+                size="small"
+              >
+                {{ getLogTypeLabel(scope.row.log_type) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="action"
+            label="操作"
+            min-width="200"
+            show-overflow-tooltip
+          />
+          <el-table-column
+            prop="target"
+            label="目标"
+            width="150"
+            show-overflow-tooltip
+          >
+            <template #default="scope">
+              <span class="log-target-cell">{{ scope.row.target || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="username"
+            label="用户"
+            width="100"
+            align="center"
+          >
+            <template #default="scope">
+              <span>{{ scope.row.username || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="ip_address"
+            label="IP地址"
+            width="140"
+          >
+            <template #default="scope">
+              <span class="log-ip-cell">{{ scope.row.ip_address || '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            prop="status"
+            label="状态"
+            width="80"
+            align="center"
+          >
+            <template #default="scope">
+              <el-tag
+                :type="getLogStatusType(scope.row.status)"
+                size="small"
+              >
+                {{ getStatusLabel(scope.row.status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+        </el-table>
+        
+        <!-- 分页 -->
+        <div
+          v-if="logTotal > 0"
+          class="pagination-container"
+        >
+          <el-pagination
+            v-model:current-page="logPage"
+            v-model:page-size="logPageSize"
+            :page-sizes="[50, 100, 200, 500]"
+            :total="logTotal"
+            layout="total, sizes, prev, pager, next, jumper"
+            @size-change="refreshLogs"
+            @current-change="refreshLogs"
+          />
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="logsDialogVisible = false">
+          关闭
+        </el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, onMounted, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { ElMessage } from 'element-plus'
+import {
+  ArrowDown, Back, Calendar, Check, CircleCheck, CircleClose, CopyDocument, Delete, Document, FolderOpened, InfoFilled, Iphone, Key, Link, Loading, Lock, MagicStick, Monitor, Odometer, OfficeBuilding, Picture, Plus, Refresh, Search, Setting, Tools, Upload, User, View, Warning
+} from '@element-plus/icons-vue'
+import { authAPI, preferencesAPI } from '@/api'
+
+const router = useRouter()
+const route = useRoute()
+const currentUser = ref(null)
+const passwordDialogVisible = ref(false)
+const changingPassword = ref(false)
+const passwordFormRef = ref(null)
+
+// 设置菜单相关状态
+const activeSettingMenu = ref('whitelist')
+const savingSettings = ref(false)
+
+// 版本检测状态
+const versionInfo = reactive({
+  current_version: '',
+  github_url: ''
+})
+const checkingUpdate = ref(false)
+const updateCheckResult = ref(null)
+
+// 白名单设置
+const whitelistForm = reactive({
+  enabled: false,
+  ip_list: []
+})
+
+// TOTP (谷歌验证) 设置
+const totpForm = reactive({
+  enabled: false,
+  secret: '',
+  verificationCode: '',
+  disableCode: ''
+})
+const totpSetupStep = ref(0)
+const totpLoading = ref(false)
+const totpQrDataUrl = ref('')
+
+// SSL设置
+const sslForm = reactive({
+  enabled: false,
+  cert_path: '',
+  key_path: '',
+  address: '',
+  address_type: '',
+  auto_generated: false
+})
+
+// SSL自动配置表单
+const sslAutoForm = reactive({
+  address: '',
+  addressType: '',
+  detectMessage: ''
+})
+
+// SSL自动配置状态
+const detectingAddress = ref(false)
+const autoConfiguring = ref(false)
+const verifyingCert = ref(false)
+
+// IP验证正则表达式（IPv4）
+// IPv6 validation is handled by the backend using Python's ipaddress module
+const ipv4Pattern = /^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/
+
+// 验证IP地址（IPv4格式，IPv6由后端验证）
+const isValidIp = (ip) => {
+  if (!ip || !ip.trim()) return false
+  const trimmedIp = ip.trim()
+  // Check IPv4 format
+  if (ipv4Pattern.test(trimmedIp)) return true
+  // Basic IPv6 check (contains colons, let backend do full validation)
+  if (trimmedIp.includes(':') && /^[0-9a-fA-F:]+$/.test(trimmedIp)) return true
+  return false
+}
+
+// 计算有效IP数量
+const validIpCount = computed(() => {
+  return whitelistForm.ip_list.filter(ip => isValidIp(ip)).length
+})
+
+// 日志相关状态
+const logsDialogVisible = ref(false)
+const loadingLogs = ref(false)
+const systemLogs = ref([])
+const recentLogs = ref([])
+const logTypes = ref([])
+const logStats = ref({ total: 0, by_type: {}, by_status: {} })
+const logPage = ref(1)
+const logPageSize = ref(100)
+const logTotal = ref(0)
+const logTypeFilter = ref('')
+const logStatusFilter = ref('')
+
+// 日志类型标签映射
+const logTypeLabels = {
+  'login': '登录成功',
+  'login_failed': '登录失败',
+  'logout': '用户登出',
+  'password_change': '密码修改',
+  'server_connect': '服务器连接',
+  'server_create': '创建服务器',
+  'server_update': '更新服务器',
+  'server_delete': '删除服务器',
+  'server_check': '检测服务器',
+  'backup': '系统备份',
+  'settings': '设置修改',
+  'import': '服务器导入'
+}
+
+// 日志类型颜色映射
+const logTypeColors = {
+  'login': 'success',
+  'login_failed': 'danger',
+  'logout': 'info',
+  'password_change': 'warning',
+  'server_connect': 'primary',
+  'server_create': 'success',
+  'server_update': 'warning',
+  'server_delete': 'danger',
+  'server_check': 'info',
+  'backup': 'primary',
+  'settings': 'warning',
+  'import': 'success'
+}
+
+const passwordForm = reactive({
+  old_password: '',
+  new_password: '',
+  confirm_password: ''
+})
+const passwordRules = {
+  old_password: [
+    { required: true, message: '请输入旧密码', trigger: 'blur' }
+  ],
+  new_password: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 6, message: '密码长度不能少于6个字符', trigger: 'blur' }
+  ],
+  confirm_password: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator: (_rule, value, callback) => {
+        if (value !== passwordForm.new_password) {
+          callback(new Error('两次输入的密码不一致'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ]
+}
+
+const activeMenu = computed(() => route.path)
+
+// 加载系统设置
+const loadSystemSettings = async () => {
+  try {
+    const response = await preferencesAPI.getSystemSettings()
+    if (response.data.success) {
+      const settings = response.data.settings
+      // 白名单设置
+      whitelistForm.enabled = settings.login_whitelist?.enabled || false
+      whitelistForm.ip_list = settings.login_whitelist?.ip_list || []
+      if (whitelistForm.ip_list.length === 0) {
+        whitelistForm.ip_list = ['']
+      }
+      // SSL设置
+      sslForm.enabled = settings.ssl?.enabled || false
+      sslForm.cert_path = settings.ssl?.cert_path || ''
+      sslForm.key_path = settings.ssl?.key_path || ''
+      sslForm.address = settings.ssl?.address || ''
+      sslForm.address_type = settings.ssl?.address_type || ''
+      sslForm.auto_generated = settings.ssl?.auto_generated || false
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '网络连接失败'
+    ElMessage.error(`加载系统设置失败: ${message}`)
+  }
+}
+
+// 保存白名单设置
+const saveWhitelistSettings = async () => {
+  savingSettings.value = true
+  try {
+    const response = await preferencesAPI.updateSystemSettings({
+      login_whitelist: {
+        enabled: whitelistForm.enabled,
+        ip_list: whitelistForm.ip_list.filter(ip => ip.trim())
+      }
+    })
+    if (response.data.success) {
+      ElMessage.success('白名单设置已保存')
+    } else {
+      ElMessage.error(response.data.message || '保存失败')
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '网络连接失败'
+    ElMessage.error(`保存设置失败: ${message}`)
+  } finally {
+    savingSettings.value = false
+  }
+}
+
+// 跳转到HTTPS（如果当前是HTTP且SSL已启用）
+const redirectToHttpsIfNeeded = () => {
+  if (window.location.protocol === 'http:') {
+    // 提示用户即将跳转
+    ElMessage.info('SSL已启用，正在跳转到HTTPS...')
+    // 延迟跳转，让用户看到提示信息
+    setTimeout(() => {
+      const httpsUrl = window.location.href.replace('http://', 'https://')
+      window.location.href = httpsUrl
+    }, 1500)
+    return true
+  }
+  return false
+}
+
+// 保存SSL设置
+const saveSSLSettings = async () => {
+  savingSettings.value = true
+  try {
+    const response = await preferencesAPI.updateSystemSettings({
+      ssl: {
+        enabled: sslForm.enabled,
+        cert_path: sslForm.cert_path,
+        key_path: sslForm.key_path
+      }
+    })
+    if (response.data.success) {
+      ElMessage.success('SSL设置已保存')
+      // 如果启用了SSL且当前是HTTP，跳转到HTTPS
+      if (sslForm.enabled) {
+        redirectToHttpsIfNeeded()
+      }
+    } else {
+      ElMessage.error(response.data.message || '保存失败')
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '网络连接失败'
+    ElMessage.error(`保存设置失败: ${message}`)
+  } finally {
+    savingSettings.value = false
+  }
+}
+
+// 添加白名单IP
+const addWhitelistIp = () => {
+  whitelistForm.ip_list.push('')
+}
+
+// 移除白名单IP
+const removeWhitelistIp = (index) => {
+  whitelistForm.ip_list.splice(index, 1)
+  if (whitelistForm.ip_list.length === 0) {
+    whitelistForm.ip_list.push('')
+  }
+}
+
+// 检测地址类型（IP或域名）
+const handleDetectAddress = async () => {
+  const address = sslAutoForm.address.trim()
+  
+  if (!address) {
+    // 如果没有输入地址，自动检测服务器地址
+    detectingAddress.value = true
+    try {
+      const response = await preferencesAPI.detectServerAddress()
+      if (response.data.success) {
+        sslAutoForm.address = response.data.address
+        sslAutoForm.addressType = response.data.type
+        sslAutoForm.detectMessage = response.data.message
+        ElMessage.success(response.data.message)
+      }
+    } catch (error) {
+      const message = error.response?.data?.message || error.message || '检测失败'
+      ElMessage.error(`检测服务器地址失败: ${message}`)
+    } finally {
+      detectingAddress.value = false
+    }
+    return
+  }
+  
+  // 检测用户输入的地址类型
+  detectingAddress.value = true
+  try {
+    const response = await preferencesAPI.detectSSLAddress(address)
+    sslAutoForm.addressType = response.data.type
+    sslAutoForm.detectMessage = response.data.message
+    if (response.data.is_valid) {
+      ElMessage.success(response.data.message)
+    } else {
+      ElMessage.warning(response.data.message)
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '检测失败'
+    ElMessage.error(`检测地址失败: ${message}`)
+  } finally {
+    detectingAddress.value = false
+  }
+}
+
+// 一键自动配置SSL
+const handleAutoConfigureSSL = async () => {
+  autoConfiguring.value = true
+  try {
+    const response = await preferencesAPI.autoConfigureSSL(sslAutoForm.address)
+    if (response.data.success) {
+      // 更新SSL表单
+      sslForm.enabled = true
+      sslForm.cert_path = response.data.cert_path
+      sslForm.key_path = response.data.key_path
+      sslForm.address = response.data.address
+      sslForm.address_type = response.data.address_type
+      sslForm.auto_generated = true
+      
+      // 更新自动配置表单
+      sslAutoForm.address = response.data.address
+      sslAutoForm.addressType = response.data.address_type
+      sslAutoForm.detectMessage = response.data.message
+      
+      ElMessage.success('SSL证书已自动生成并配置！')
+      // 跳转到HTTPS
+      redirectToHttpsIfNeeded()
+    } else {
+      ElMessage.error(response.data.message || '自动配置失败')
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '配置失败'
+    ElMessage.error(`SSL自动配置失败: ${message}`)
+  } finally {
+    autoConfiguring.value = false
+  }
+}
+
+// 验证证书
+const handleVerifyCertificate = async () => {
+  if (!sslForm.cert_path || !sslForm.key_path) {
+    ElMessage.warning('请先配置证书和私钥路径')
+    return
+  }
+  
+  verifyingCert.value = true
+  try {
+    const response = await preferencesAPI.verifySSLCertificate(sslForm.cert_path, sslForm.key_path)
+    if (response.data.valid) {
+      ElMessage.success('证书验证通过！')
+      if (response.data.details) {
+        // 可以显示更多证书详情
+        if (response.data.details.expires) {
+          ElMessage.info(`证书有效期: ${response.data.details.expires}`)
+        }
+      }
+    } else {
+      ElMessage.error(response.data.message || '证书验证失败')
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '验证失败'
+    ElMessage.error(`证书验证失败: ${message}`)
+  } finally {
+    verifyingCert.value = false
+  }
+}
+
+// 获取日志类型标签
+const getLogTypeLabel = (type) => {
+  return logTypeLabels[type] || type
+}
+
+// 获取日志类型颜色
+const getLogTypeColor = (type) => {
+  return logTypeColors[type] || 'info'
+}
+
+// 获取日志状态类型
+const getLogStatusType = (status) => {
+  const statusMap = {
+    'success': 'success',
+    'failed': 'danger',
+    'warning': 'warning'
+  }
+  return statusMap[status] || 'info'
+}
+
+// 获取状态标签
+const getStatusLabel = (status) => {
+  const labels = {
+    'success': '成功',
+    'failed': '失败',
+    'warning': '警告'
+  }
+  return labels[status] || status
+}
+
+// 格式化日期时间
+const formatDateTime = (isoString) => {
+  if (!isoString) return '-'
+  const date = new Date(isoString)
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
+}
+
+// 查看系统日志
+const viewSystemLogs = async () => {
+  logsDialogVisible.value = true
+  logPage.value = 1
+  await refreshLogs()
+}
+
+// 刷新日志
+const refreshLogs = async () => {
+  loadingLogs.value = true
+  try {
+    const response = await preferencesAPI.getSystemLogs({
+      page: logPage.value,
+      perPage: logPageSize.value,
+      logType: logTypeFilter.value || undefined,
+      status: logStatusFilter.value || undefined
+    })
+    if (response.data.success) {
+      systemLogs.value = response.data.logs || []
+      logTotal.value = response.data.total || 0
+    } else {
+      ElMessage.error(response.data.message || '获取日志失败')
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '网络连接失败'
+    ElMessage.error(`获取系统日志失败: ${message}`)
+  } finally {
+    loadingLogs.value = false
+  }
+}
+
+// 过滤日志
+const filterLogs = async () => {
+  logPage.value = 1
+  await refreshLogs()
+}
+
+// 加载日志类型
+const loadLogTypes = async () => {
+  try {
+    const response = await preferencesAPI.getLogTypes()
+    if (response.data.success) {
+      logTypes.value = response.data.types || []
+    }
+  } catch (_error) {
+    // 忽略错误
+  }
+}
+
+// 加载日志统计
+const loadLogStats = async () => {
+  try {
+    const response = await preferencesAPI.getLogStats()
+    if (response.data.success) {
+      logStats.value = response.data.stats || { total: 0, by_type: {}, by_status: {} }
+    }
+  } catch (_error) {
+    // 忽略错误
+  }
+}
+
+// 加载最近日志
+const loadRecentLogs = async () => {
+  try {
+    const response = await preferencesAPI.getSystemLogs({
+      page: 1,
+      perPage: 10
+    })
+    if (response.data.success) {
+      recentLogs.value = response.data.logs || []
+    }
+  } catch (_error) {
+    // 忽略错误
+  }
+}
+
+// 处理设置菜单选择
+const handleSettingMenuSelect = async (index) => {
+  activeSettingMenu.value = index
+  if (index === 'logs') {
+    await Promise.all([loadLogTypes(), loadLogStats(), loadRecentLogs()])
+  } else if (index === 'totp') {
+    await loadTotpStatus()
+  } else if (index === 'version') {
+    await loadVersionInfo()
+  }
+}
+
+// 加载TOTP状态
+const loadTotpStatus = async () => {
+  try {
+    const response = await authAPI.getTotpStatus()
+    totpForm.enabled = response.data.totp_enabled
+    // Reset setup step when loading
+    if (!totpForm.enabled) {
+      totpSetupStep.value = 0
+      totpForm.secret = ''
+      totpForm.verificationCode = ''
+      totpQrDataUrl.value = ''
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '获取状态失败'
+    ElMessage.error(`获取谷歌验证状态失败: ${message}`)
+  }
+}
+
+// 设置TOTP（生成密钥）
+const handleSetupTotp = async () => {
+  totpLoading.value = true
+  try {
+    const response = await authAPI.setupTotp()
+    if (response.data.success) {
+      totpForm.secret = response.data.secret
+      // Generate QR code data URL
+      await generateQrCode(response.data.uri)
+      totpSetupStep.value = 1
+      ElMessage.success('密钥已生成，请扫描二维码')
+    } else {
+      ElMessage.error(response.data.message || '生成密钥失败')
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '设置失败'
+    ElMessage.error(`设置谷歌验证失败: ${message}`)
+  } finally {
+    totpLoading.value = false
+  }
+}
+
+// 生成QR码 (使用本地库，不发送敏感数据到外部服务)
+const generateQrCode = async (uri) => {
+  try {
+    // Import QRCode library dynamically to generate QR codes locally
+    // This keeps the TOTP secret secure by not sending it to external services
+    const QRCode = await import('qrcode')
+    totpQrDataUrl.value = await QRCode.toDataURL(uri, {
+      width: 200,
+      margin: 2,
+      color: {
+        dark: '#000000',
+        light: '#ffffff'
+      }
+    })
+  } catch (_error) {
+    // Fallback: just show the URI for manual entry
+    totpQrDataUrl.value = ''
+  }
+}
+
+// 复制密钥
+const copySecretKey = async () => {
+  try {
+    await navigator.clipboard.writeText(totpForm.secret)
+    ElMessage.success('密钥已复制到剪贴板')
+  } catch (_error) {
+    ElMessage.error('复制失败，请手动复制')
+  }
+}
+
+// 启用TOTP
+const handleEnableTotp = async () => {
+  if (!totpForm.verificationCode || totpForm.verificationCode.length !== 6) {
+    ElMessage.warning('请输入6位验证码')
+    return
+  }
+  
+  totpLoading.value = true
+  try {
+    const response = await authAPI.enableTotp(totpForm.verificationCode)
+    if (response.data.success) {
+      totpForm.enabled = true
+      totpSetupStep.value = 0
+      totpForm.verificationCode = ''
+      ElMessage.success('谷歌验证已成功启用！')
+    } else {
+      ElMessage.error(response.data.message || '启用失败')
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '启用失败'
+    ElMessage.error(`启用谷歌验证失败: ${message}`)
+  } finally {
+    totpLoading.value = false
+  }
+}
+
+// 禁用TOTP
+const handleDisableTotp = async () => {
+  if (!totpForm.disableCode || totpForm.disableCode.length !== 6) {
+    ElMessage.warning('请输入6位验证码')
+    return
+  }
+  
+  totpLoading.value = true
+  try {
+    const response = await authAPI.disableTotp(totpForm.disableCode)
+    if (response.data.success) {
+      totpForm.enabled = false
+      totpForm.secret = ''
+      totpForm.disableCode = ''
+      totpSetupStep.value = 0
+      ElMessage.success('谷歌验证已禁用')
+    } else {
+      ElMessage.error(response.data.message || '禁用失败')
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '禁用失败'
+    ElMessage.error(`禁用谷歌验证失败: ${message}`)
+  } finally {
+    totpLoading.value = false
+  }
+}
+
+// ============ 版本检测相关函数 ============
+
+// 加载版本信息
+const loadVersionInfo = async () => {
+  try {
+    const response = await preferencesAPI.getVersionInfo()
+    if (response.data.success) {
+      Object.assign(versionInfo, response.data.version)
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '获取版本信息失败'
+    ElMessage.error(message)
+  }
+}
+
+// 检查更新
+const handleCheckForUpdates = async () => {
+  checkingUpdate.value = true
+  updateCheckResult.value = null
+  try {
+    const response = await preferencesAPI.checkForUpdates()
+    updateCheckResult.value = response.data
+    if (response.data.has_update) {
+      ElMessage.warning(`发现新版本 v${response.data.latest_version}`)
+    } else if (response.data.success) {
+      ElMessage.success('当前已是最新版本')
+    } else {
+      ElMessage.error(response.data.message || '检查更新失败')
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '检查更新失败'
+    updateCheckResult.value = {
+      success: false,
+      message: message
+    }
+    ElMessage.error(message)
+  } finally {
+    checkingUpdate.value = false
+  }
+}
+
+// 打开发布页面
+const openReleaseUrl = (url) => {
+  window.open(url, '_blank')
+}
+
+onMounted(async () => {
+  const userStr = localStorage.getItem('user')
+  if (userStr) {
+    currentUser.value = JSON.parse(userStr)
+  }
+  await loadSystemSettings()
+})
+
+const goBack = () => {
+  router.push('/dashboard')
+}
+
+const handleMenuSelect = (index) => {
+  router.push(index)
+}
+
+const handleCommand = async (command) => {
+  if (command === 'changePassword') {
+    passwordForm.old_password = ''
+    passwordForm.new_password = ''
+    passwordForm.confirm_password = ''
+    passwordDialogVisible.value = true
+  } else if (command === 'logout') {
+    try {
+      await authAPI.logout()
+    } catch (_error) {
+      // 忽略登出错误，因为仍然需要清除本地存储
+    }
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    router.push('/login')
+  }
+}
+
+const handleChangePassword = async () => {
+  if (!passwordFormRef.value) return
+  
+  await passwordFormRef.value.validate(async (valid) => {
+    if (valid) {
+      changingPassword.value = true
+      try {
+        await authAPI.changePassword({
+          old_password: passwordForm.old_password,
+          new_password: passwordForm.new_password
+        })
+        ElMessage.success('密码修改成功')
+        passwordDialogVisible.value = false
+      } catch (error) {
+        const message = error.response?.data?.message || '密码修改失败'
+        ElMessage.error(message)
+      } finally {
+        changingPassword.value = false
+      }
+    }
+  })
+}
+</script>
+
+<style scoped>
+/* 页面容器 */
+.page-container {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e7ed 100%);
+}
+
+/* 头部样式 - 统一淡蓝色导航 */
+.header-container {
+  background: linear-gradient(135deg, #5b9bd5 0%, #7db8e8 50%, #9ecae1 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 4px 24px 0 rgba(91, 155, 213, 0.35);
+}
+
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-logo h2 {
+  margin: 0;
+  font-weight: 600;
+}
+
+.header-menu {
+  border: none;
+  flex: 1;
+  margin-left: 50px;
+  background: transparent !important;
+}
+
+.header-menu :deep(.el-menu-item) {
+  color: rgba(255, 255, 255, 0.9) !important;
+  font-weight: 500;
+  font-size: 15px;
+  border-radius: 8px;
+  margin: 0 4px;
+  transition: all 0.3s ease;
+}
+
+.header-menu :deep(.el-menu-item:hover) {
+  background: rgba(255, 255, 255, 0.2) !important;
+  color: #fff !important;
+}
+
+.header-menu :deep(.el-menu-item.is-active) {
+  background: rgba(255, 255, 255, 0.25) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 8px rgba(255, 255, 255, 0.2);
+}
+
+/* 子菜单样式 */
+.header-menu :deep(.el-sub-menu__title) {
+  color: rgba(255, 255, 255, 0.9) !important;
+  font-weight: 500;
+  font-size: 15px;
+  border-radius: 8px;
+  margin: 0 4px;
+  transition: all 0.3s ease;
+}
+
+.header-menu :deep(.el-sub-menu__title:hover) {
+  background: rgba(255, 255, 255, 0.2) !important;
+  color: #fff !important;
+}
+
+.header-menu :deep(.el-sub-menu.is-active .el-sub-menu__title) {
+  background: rgba(255, 255, 255, 0.25) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 8px rgba(255, 255, 255, 0.2);
+}
+
+.user-dropdown {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 10px 15px;
+  color: white;
+  transition: all 0.3s;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.user-dropdown:hover {
+  background-color: rgba(255, 255, 255, 0.25);
+}
+
+/* 主内容区 */
+.main-content {
+  background: transparent;
+}
+
+.content-wrapper {
+  padding: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* 设置卡片 */
+.settings-card {
+  border-radius: 16px;
+  box-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.05);
+  border: none;
+}
+
+.settings-card :deep(.el-card__header) {
+  border-bottom: 1px solid #f0f0f0;
+  padding: 20px 24px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.card-header-icon {
+  color: #409EFF;
+}
+
+.card-header-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.settings-content {
+  min-height: 500px;
+  padding: 16px;
+}
+
+/* 设置菜单样式 */
+.settings-menu {
+  border-right: 1px solid #e6e6e6;
+  border-radius: 8px;
+  background: #fafafa;
+}
+
+.settings-menu :deep(.el-menu-item) {
+  height: 50px;
+  line-height: 50px;
+  font-size: 14px;
+  margin: 4px 0;
+  border-radius: 8px;
+}
+
+.settings-menu :deep(.el-menu-item.is-active) {
+  background: linear-gradient(135deg, #409EFF 0%, #66b1ff 100%);
+  color: white;
+}
+
+/* 设置面板样式 */
+.setting-panel {
+  padding: 20px;
+  background: #fafafa;
+  border-radius: 12px;
+}
+
+.setting-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 24px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid #409EFF;
+}
+
+.form-tip {
+  margin-left: 12px;
+  font-size: 12px;
+  color: #909399;
+}
+
+/* IP列表样式 */
+.ip-list-container {
+  width: 100%;
+}
+
+.ip-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ip-item .el-input {
+  flex: 1;
+}
+
+.ip-item .el-input.is-valid :deep(.el-input__wrapper) {
+  border-color: #67C23A;
+  box-shadow: 0 0 0 1px #67C23A inset;
+}
+
+.ip-item .el-input.is-invalid :deep(.el-input__wrapper) {
+  border-color: #F56C6C;
+  box-shadow: 0 0 0 1px #F56C6C inset;
+}
+
+.valid-icon {
+  color: #67C23A;
+}
+
+.invalid-icon {
+  color: #F56C6C;
+}
+
+.ip-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.ip-count {
+  font-size: 13px;
+  color: #909399;
+}
+
+.tip-icon {
+  margin-left: 8px;
+  color: #909399;
+  cursor: help;
+}
+
+.setting-alert {
+  margin-bottom: 20px;
+}
+
+.path-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.path-configured :deep(.el-input__wrapper) {
+  background-color: rgba(103, 194, 58, 0.05);
+}
+
+/* 日志操作区 */
+.log-actions {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.log-description {
+  margin-bottom: 16px;
+  color: #606266;
+  font-size: 14px;
+}
+
+.log-description p {
+  margin: 0;
+}
+
+/* 日志统计 */
+.log-stats {
+  margin-top: 24px;
+  padding: 16px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #ebeef5;
+}
+
+.log-stats h4 {
+  margin: 0 0 16px 0;
+  font-size: 15px;
+  color: #303133;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 12px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  background: #f5f7fa;
+  border-radius: 8px;
+  text-align: center;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  font-size: 20px;
+  font-weight: 600;
+  color: #409EFF;
+}
+
+/* 最近日志 */
+.recent-logs {
+  margin-top: 24px;
+}
+
+.recent-logs h4 {
+  margin: 0 0 16px 0;
+  font-size: 15px;
+  color: #303133;
+}
+
+.log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.log-item {
+  padding: 12px 16px;
+  background: #fff;
+  border-radius: 8px;
+  border-left: 4px solid #409EFF;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.log-item.log-failed {
+  border-left-color: #F56C6C;
+}
+
+.log-item.log-warning {
+  border-left-color: #E6A23C;
+}
+
+.log-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.log-time {
+  font-size: 12px;
+  color: #909399;
+}
+
+.log-item-body {
+  margin-bottom: 8px;
+}
+
+.log-action {
+  font-weight: 500;
+  color: #303133;
+}
+
+.log-target {
+  color: #409EFF;
+  margin-left: 8px;
+}
+
+.log-item-footer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  color: #909399;
+}
+
+.log-user,
+.log-ip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 加载状态 */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: #909399;
+  width: 100%;
+}
+
+.loading-icon {
+  color: #409EFF;
+  animation: rotate 1s linear infinite;
+}
+
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-text {
+  margin-top: 16px;
+  font-size: 14px;
+  color: #606266;
+}
+
+/* 日志对话框样式 */
+.logs-dialog-content {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.logs-toolbar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.log-time-cell {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 12px;
+  color: #606266;
+}
+
+.log-target-cell {
+  color: #409EFF;
+  font-weight: 500;
+}
+
+.log-ip-cell {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 12px;
+}
+
+.pagination-container {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #ebeef5;
+}
+
+/* SSL自动配置样式 */
+.ssl-auto-config {
+  background: linear-gradient(135deg, #f0f9eb 0%, #e8f5e0 100%);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  border: 1px solid #c2e7b0;
+}
+
+.sub-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #67C23A;
+  margin: 0 0 16px 0;
+}
+
+.address-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.detect-message {
+  font-size: 13px;
+  color: #67C23A;
+}
+
+.cert-info {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 20px;
+  padding: 16px;
+  background: #fdf6ec;
+  border-radius: 8px;
+  border: 1px solid #faecd8;
+}
+
+.cert-address {
+  font-size: 14px;
+  color: #E6A23C;
+  font-weight: 500;
+}
+
+/* TOTP (谷歌验证) 样式 */
+.totp-status-section {
+  margin-bottom: 24px;
+  padding: 16px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.totp-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.status-label {
+  font-size: 14px;
+  color: #606266;
+  font-weight: 500;
+}
+
+.totp-setup-section {
+  margin-top: 24px;
+}
+
+.totp-steps {
+  margin-bottom: 32px;
+}
+
+.totp-step-content {
+  padding: 24px;
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid #ebeef5;
+}
+
+.totp-step-content p {
+  margin: 0 0 16px 0;
+  color: #606266;
+}
+
+.qr-code-container {
+  display: flex;
+  justify-content: center;
+  margin: 24px 0;
+}
+
+.qr-code-image {
+  width: 200px;
+  height: 200px;
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  padding: 8px;
+  background: #fff;
+}
+
+.qr-code-placeholder {
+  width: 200px;
+  height: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #f5f7fa;
+  border-radius: 8px;
+  color: #909399;
+}
+
+.qr-code-placeholder p {
+  margin: 8px 0 0 0;
+  font-size: 12px;
+}
+
+.secret-key-section {
+  margin: 24px 0;
+  padding: 16px;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+
+.secret-key-section p {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: #909399;
+}
+
+.secret-key-input {
+  max-width: 400px;
+}
+
+.secret-key-input :deep(.el-input__inner) {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  letter-spacing: 2px;
+  font-weight: 600;
+}
+
+.verification-code-input {
+  max-width: 200px;
+  margin-bottom: 16px;
+}
+
+.verification-code-input :deep(.el-input__inner) {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 18px;
+  letter-spacing: 4px;
+  text-align: center;
+}
+
+.totp-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.totp-enabled-section {
+  margin-top: 24px;
+}
+
+.disable-totp-section {
+  margin-top: 24px;
+  padding: 20px;
+  background: #fef0f0;
+  border-radius: 12px;
+  border: 1px solid #fbc4c4;
+}
+
+.disable-totp-section h4 {
+  margin: 0 0 16px 0;
+  color: #F56C6C;
+}
+
+.warning-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #F56C6C;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+/* 版本检测样式 */
+.version-info-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px;
+  background: linear-gradient(135deg, #ecf5ff 0%, #f0f9ff 100%);
+  border-radius: 12px;
+  margin-bottom: 24px;
+  border: 1px solid #d9ecff;
+}
+
+.version-current {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.version-label {
+  font-size: 14px;
+  color: #909399;
+}
+
+.version-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #409EFF;
+}
+
+.version-github {
+  display: flex;
+  align-items: center;
+}
+
+.version-check-section {
+  margin-bottom: 24px;
+}
+
+.version-result-section {
+  margin-top: 24px;
+  padding: 24px;
+  background: #fff;
+  border-radius: 12px;
+  border: 1px solid #ebeef5;
+}
+
+.update-details {
+  text-align: left;
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.update-date {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #909399;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.update-notes {
+  margin-bottom: 20px;
+}
+
+.update-notes h4 {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  color: #303133;
+}
+
+.release-notes-content {
+  padding: 16px;
+  background: #f5f7fa;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #606266;
+  max-height: 300px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  margin: 0;
+  font-family: inherit;
+}
+</style>

@@ -1,0 +1,908 @@
+from flask import Blueprint, request, jsonify, Response
+from models import db
+from models.server import Server
+from routes.auth import token_required
+from utils.crypto import PasswordEncryption
+from utils import china_now
+from services.ssh_service import SSHService
+from services.check_service import CheckService
+from services.log_service import (
+    log_server_create, log_server_update, log_server_delete,
+    log_server_check, log_import
+)
+from extensions import limiter
+from config import Config
+import logging
+import os
+import json
+import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+servers_bp = Blueprint('servers', __name__, url_prefix='/api/servers')
+logger = logging.getLogger(__name__)
+MAX_ERROR_TYPE_LENGTH = 50
+MAX_SERVER_FETCH = 1000
+
+# Initialize password encryption
+password_encryptor = PasswordEncryption(Config.ENCRYPTION_KEY)
+
+
+def _normalize_error_type(error_type):
+    """Ensure error_type fits database constraints."""
+    if not error_type:
+        return None
+    return str(error_type)[:MAX_ERROR_TYPE_LENGTH]
+
+
+@servers_bp.route('', methods=['GET'])
+@token_required
+def get_servers(_current_user):
+    """获取所有服务器"""
+    servers = (
+        Server.query
+        .order_by(Server.updated_at.desc())
+        .limit(MAX_SERVER_FETCH)
+        .all()
+    )
+    return jsonify([server.to_dict() for server in servers]), 200
+
+
+@servers_bp.route('', methods=['POST'])
+@token_required
+def create_server(current_user):
+    """创建新服务器"""
+    data = request.get_json()
+
+    if not data.get('ip_address') or not data.get('username') or not data.get('password'):
+        return jsonify({'message': 'IP address, username, and password are required'}), 400
+
+    # Check for duplicate IP address
+    existing_server = Server.query.filter_by(ip_address=data['ip_address']).first()
+    if existing_server:
+        return jsonify({'message': f'服务器IP {data["ip_address"]} 已存在'}), 400
+
+    # Encrypt password before storing
+    encrypted_password = password_encryptor.encrypt(data['password'])
+
+    server = Server(
+        ip_address=data['ip_address'],
+        port=data.get('port', 22),
+        username=data['username'],
+        encrypted_password=encrypted_password,
+        notes=data.get('notes', '')
+    )
+
+    db.session.add(server)
+    db.session.commit()
+
+    logger.info(f"Server created: {server.ip_address}")
+    log_server_create(current_user, server.ip_address, server.port, server.username)
+    return jsonify(server.to_dict()), 201
+
+
+@servers_bp.route('/<int:server_id>', methods=['GET'])
+@token_required
+def get_server(_current_user, server_id):
+    """获取特定服务器"""
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    return jsonify(server.to_dict()), 200
+
+
+@servers_bp.route('/<int:server_id>/password', methods=['GET'])
+@token_required
+def get_server_password(_current_user, server_id):
+    """获取服务器密码（解密后）"""
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    # Decrypt password
+    password = password_encryptor.decrypt(server.encrypted_password)
+
+    return jsonify({'password': password}), 200
+
+
+@servers_bp.route('/<int:server_id>', methods=['PUT'])
+@token_required
+def update_server(current_user, server_id):
+    """更新服务器"""
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    data = request.get_json()
+    changes = {}
+
+    # Check for duplicate IP address when updating IP
+    if 'ip_address' in data and data['ip_address'] != server.ip_address:
+        existing_server = Server.query.filter_by(ip_address=data['ip_address']).first()
+        if existing_server:
+            return jsonify({'message': f'服务器IP {data["ip_address"]} 已存在'}), 400
+        changes['ip_address'] = {'from': server.ip_address, 'to': data['ip_address']}
+        server.ip_address = data['ip_address']
+    if 'port' in data:
+        if server.port != data['port']:
+            changes['port'] = {'from': server.port, 'to': data['port']}
+        server.port = data['port']
+    if 'username' in data:
+        if server.username != data['username']:
+            changes['username'] = {'from': server.username, 'to': data['username']}
+        server.username = data['username']
+    if 'password' in data:
+        changes['password'] = '已修改'
+        server.encrypted_password = password_encryptor.encrypt(data['password'])
+    if 'notes' in data:
+        if server.notes != data['notes']:
+            changes['notes'] = '已修改'
+        server.notes = data['notes']
+
+    server.updated_at = china_now()
+    db.session.commit()
+
+    logger.info(f"Server updated: {server.ip_address}")
+    log_server_update(current_user, server.ip_address, changes)
+    return jsonify(server.to_dict()), 200
+
+
+@servers_bp.route('/<int:server_id>', methods=['DELETE'])
+@token_required
+def delete_server(current_user, server_id):
+    """删除服务器"""
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    ip_address = server.ip_address
+    db.session.delete(server)
+    db.session.commit()
+
+    logger.info(f"Server deleted: {ip_address}")
+    log_server_delete(current_user, ip_address)
+    return jsonify({'message': 'Server deleted successfully'}), 200
+
+
+@servers_bp.route('/<int:server_id>/check', methods=['POST'])
+@token_required
+def check_server(current_user, server_id):
+    """检查服务器状态"""
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    # Decrypt password
+    password = password_encryptor.decrypt(server.encrypted_password)
+
+    # Check status
+    status_info = CheckService.check_server_status(
+        server.ip_address,
+        server.port,
+        server.username,
+        password
+    )
+
+    # Update server status
+    server.status = status_info['overall']
+    server.last_checked = china_now()
+    server.check_detail = status_info.get('detail')
+    server.error_type = _normalize_error_type(status_info.get('error_type'))
+    db.session.commit()
+
+    log_server_check(current_user, server.ip_address, status_info['overall'])
+
+    return jsonify({
+        'server_id': server_id,
+        'status': status_info,
+        'last_checked': server.last_checked.isoformat() if server.last_checked else None,
+        'updated_at': server.updated_at.isoformat() if server.updated_at else None,
+        'check_detail': server.check_detail,
+        'error_type': server.error_type
+    }), 200
+
+
+def _check_single_server(server_data):
+    """Check a single server status (for use in thread pool).
+
+    Args:
+        server_data: tuple of (server_id, ip_address, port, username, encrypted_password)
+
+    Returns:
+        dict with server check results
+    """
+    server_id, ip_address, port, username, encrypted_password = server_data
+
+    try:
+        password = password_encryptor.decrypt(encrypted_password)
+        status_info = CheckService.check_server_status(
+            ip_address,
+            port,
+            username,
+            password
+        )
+
+        return {
+            'server_id': server_id,
+            'ip_address': ip_address,
+            'status_info': status_info,
+            'success': True
+        }
+    except Exception as e:
+        logger.error(f"Error checking server {ip_address}: {str(e)}")
+        return {
+            'server_id': server_id,
+            'ip_address': ip_address,
+            'status_info': {
+                'overall': 'offline',
+                'detail': f'检测出错: {str(e)}',
+                'error_type': 'check_error'
+            },
+            'success': False
+        }
+
+
+@servers_bp.route('/check-all', methods=['POST'])
+@limiter.exempt
+@token_required
+def check_all_servers(_current_user):
+    """检查所有服务器状态（并发执行）
+
+    This endpoint is exempt from rate limiting because:
+    1. It checks all servers in a single request (batched operation)
+    2. The actual network checks are done concurrently using ThreadPoolExecutor
+    3. Users should be able to check all their servers without rate limit concerns
+    """
+    servers = Server.query.all()
+    results = []
+
+    if not servers:
+        return jsonify(results), 200
+
+    # Prepare server data for concurrent checking
+    server_data_list = [
+        (server.id, server.ip_address, server.port, server.username, server.encrypted_password)
+        for server in servers
+    ]
+
+    # Create a mapping for quick lookup
+    server_map = {server.id: server for server in servers}
+
+    # Use ThreadPoolExecutor for concurrent checking
+    max_workers = min(Config.CHECK_MAX_WORKERS, len(servers))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Submit all tasks
+        future_to_server = {
+            executor.submit(_check_single_server, data): data[0]
+            for data in server_data_list
+        }
+
+        # Collect results as they complete
+        for future in as_completed(future_to_server):
+            result = future.result()
+            server_id = result['server_id']
+            server = server_map.get(server_id)
+
+            if server:
+                status_info = result['status_info']
+                server.status = status_info['overall']
+                server.last_checked = china_now()
+                server.check_detail = status_info.get('detail')
+                server.error_type = _normalize_error_type(status_info.get('error_type'))
+
+                results.append({
+                    'server_id': server_id,
+                    'ip_address': result['ip_address'],
+                    'status': status_info,
+                    'last_checked': server.last_checked.isoformat() if server.last_checked else None,
+                    'updated_at': server.updated_at.isoformat() if server.updated_at else None,
+                    'check_detail': server.check_detail,
+                    'error_type': server.error_type
+                })
+
+    db.session.commit()
+
+    return jsonify(results), 200
+
+
+@servers_bp.route('/<int:server_id>/verify-password', methods=['POST'])
+@token_required
+def verify_password(_current_user, server_id):
+    """验证服务器密码"""
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    password = password_encryptor.decrypt(server.encrypted_password)
+    ssh = SSHService(server.ip_address, server.port, server.username, password)
+
+    is_valid = ssh.verify_credentials()
+
+    return jsonify({
+        'server_id': server_id,
+        'password_valid': is_valid
+    }), 200
+
+
+@servers_bp.route('/<int:server_id>/check-port', methods=['POST'])
+@token_required
+def check_port(_current_user, server_id):
+    """检查服务器端口是否开放"""
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    is_open = CheckService.port_check(server.ip_address, server.port)
+
+    return jsonify({
+        'server_id': server_id,
+        'port': server.port,
+        'is_open': is_open
+    }), 200
+
+
+@servers_bp.route('/<int:server_id>/system-info', methods=['GET'])
+@token_required
+def get_system_info(_current_user, server_id):
+    """获取服务器系统信息"""
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    password = password_encryptor.decrypt(server.encrypted_password)
+    ssh = SSHService(server.ip_address, server.port, server.username, password)
+
+    system_info = ssh.get_system_info()
+
+    if system_info:
+        # Update server with system info
+        server.os_info = system_info.get('os')
+        server.cpu_info = system_info.get('cpu')
+        server.memory_info = system_info.get('memory')
+        server.disk_info = system_info.get('disk')
+        server.uptime = system_info.get('uptime')
+        db.session.commit()
+
+        return jsonify(system_info), 200
+    else:
+        return jsonify({'message': 'Failed to get system information'}), 500
+
+
+@servers_bp.route('/ip-region/<ip_address>', methods=['GET'])
+@token_required
+def get_ip_region(_current_user, ip_address):
+    """获取IP地址的地区信息"""
+    region_info = CheckService.get_ip_region(ip_address)
+    return jsonify(region_info), 200
+
+
+@servers_bp.route('/port-type/<int:port>', methods=['GET'])
+@token_required
+def get_port_type(_current_user, port):
+    """获取端口类型信息"""
+    port_info = CheckService.get_port_type(port)
+    return jsonify(port_info), 200
+
+
+def _is_valid_ip(ip):
+    """Validate IP address format."""
+    if not ip or not isinstance(ip, str):
+        return False
+    parts = ip.split('.')
+    if len(parts) != 4:
+        return False
+    for part in parts:
+        if not part.isdigit():
+            return False
+        num = int(part)
+        if num < 0 or num > 255:
+            return False
+    return True
+
+
+@servers_bp.route('/check-ip-status', methods=['POST'])
+@token_required
+def check_ip_status(_current_user):
+    """检查IP地址的在线状态和端口状态（22和3389）
+
+    Request body:
+        ip_address: IP地址
+
+    Returns:
+        ping: 是否可以ping通
+        port_22: 端口22是否开放
+        port_3389: 端口3389是否开放
+    """
+    data = request.get_json() or {}
+    ip_address = data.get('ip_address', '')
+
+    if not ip_address:
+        return jsonify({'message': '请提供IP地址'}), 400
+
+    if not _is_valid_ip(ip_address):
+        return jsonify({'message': '无效的IP地址格式'}), 400
+
+    # Check ping status
+    ping_status = CheckService.ping_check(ip_address)
+
+    # Check port 22 (SSH)
+    port_22_status = CheckService.port_check(ip_address, 22)
+
+    # Check port 3389 (RDP)
+    port_3389_status = CheckService.port_check(ip_address, 3389)
+
+    return jsonify({
+        'ip_address': ip_address,
+        'ping': ping_status,
+        'port_22': port_22_status,
+        'port_3389': port_3389_status
+    }), 200
+
+
+@servers_bp.route('/import-from-files', methods=['POST'])
+@token_required
+def import_servers_from_files(current_user):
+    """从服务器文件目录导入服务器"""
+    server_files_dir = Config.SERVER_FILES_DIR
+    if not os.path.exists(server_files_dir):
+        return jsonify({'message': f'目录不存在: {server_files_dir}'}), 404
+
+    if not os.path.isdir(server_files_dir):
+        return jsonify({'message': f'路径不是目录: {server_files_dir}'}), 400
+
+    imported = []
+    skipped = []
+    errors = []
+
+    try:
+        files = os.listdir(server_files_dir)
+    except PermissionError:
+        return jsonify({'message': f'无权限访问目录: {server_files_dir}'}), 403
+    except OSError as e:
+        return jsonify({'message': f'读取目录失败: {str(e)}'}), 500
+
+    txt_files = [f for f in files if f.endswith('.txt')]
+
+    try:
+        for filename in txt_files:
+            filepath = os.path.join(server_files_dir, filename)
+            # Get notes from filename without .txt extension
+            notes = filename[:-4]  # Remove .txt
+
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    content = f.read().strip()
+
+                if not content:
+                    errors.append({'file': filename, 'error': '文件为空'})
+                    continue
+
+                data = json.loads(content)
+
+                # Extract IP from ips array
+                ips = data.get('ips', [])
+                if not ips or not isinstance(ips, list):
+                    errors.append({'file': filename, 'error': '缺少有效的ips字段'})
+                    continue
+                ip_address = ips[0]
+
+                # Validate IP address
+                if not _is_valid_ip(ip_address):
+                    errors.append({'file': filename, 'error': f'无效的IP地址: {ip_address}'})
+                    continue
+
+                # Extract password
+                password = data.get('password', '')
+                if not password:
+                    errors.append({'file': filename, 'error': '缺少password字段'})
+                    continue
+
+                # Determine OS type and set port/username accordingly
+                os_name = data.get('os_name', '').lower()
+                os_id = data.get('os_id', '').lower()
+
+                if 'windows' in os_name or 'windows' in os_id:
+                    port = 3389
+                    username = 'Administrator'
+                else:
+                    # Default to Linux/CentOS - SSH
+                    port = 22
+                    username = 'root'
+
+                # Check if server with same IP already exists
+                existing = Server.query.filter_by(ip_address=ip_address).first()
+                if existing:
+                    skipped.append({
+                        'file': filename,
+                        'ip': ip_address,
+                        'reason': '服务器已存在'
+                    })
+                    continue
+
+                # Encrypt password and create server
+                encrypted_password = password_encryptor.encrypt(password)
+                server = Server(
+                    ip_address=ip_address,
+                    port=port,
+                    username=username,
+                    encrypted_password=encrypted_password,
+                    notes=notes
+                )
+                db.session.add(server)
+                imported.append({
+                    'file': filename,
+                    'ip': ip_address,
+                    'port': port,
+                    'username': username,
+                    'notes': notes
+                })
+                logger.info(f"Imported server from file: {filename} -> {ip_address}")
+
+            except json.JSONDecodeError as e:
+                errors.append({'file': filename, 'error': f'JSON解析失败: {str(e)}'})
+            except PermissionError:
+                errors.append({'file': filename, 'error': '无权限读取文件'})
+            except OSError as e:
+                errors.append({'file': filename, 'error': f'读取文件失败: {str(e)}'})
+
+        if imported:
+            db.session.commit()
+            log_import(current_user, len(imported), len(skipped), len(errors))
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Import failed: {str(e)}")
+        return jsonify({'message': f'导入失败: {str(e)}'}), 500
+
+    return jsonify({
+        'imported': imported,
+        'skipped': skipped,
+        'errors': errors,
+        'summary': {
+            'total_files': len(txt_files),
+            'imported_count': len(imported),
+            'skipped_count': len(skipped),
+            'error_count': len(errors)
+        }
+    }), 200
+
+
+@servers_bp.route('/<int:server_id>/read-file', methods=['POST'])
+@token_required
+def read_server_file(_current_user, server_id):
+    """通过SSH读取远程服务器上的文件内容"""
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    data = request.get_json()
+    file_path = data.get('file_path', '') if data else ''
+
+    if not file_path:
+        return jsonify({'message': '请提供文件路径'}), 400
+
+    # 检查端口是否为SSH端口
+    if server.port == 3389:
+        return jsonify({'message': 'Windows远程桌面服务不支持读取文件'}), 400
+
+    # Decrypt password
+    password = password_encryptor.decrypt(server.encrypted_password)
+
+    # Create SSH connection and read file
+    ssh = SSHService(server.ip_address, server.port, server.username, password)
+    result = ssh.read_remote_file(file_path)
+
+    if result['success']:
+        return jsonify({
+            'filename': file_path.split('/')[-1],
+            'file_path': result['file_path'],
+            'content': result['content']
+        }), 200
+    else:
+        return jsonify({
+            'message': result['message'],
+            'error_type': result.get('error_type')
+        }), 400
+
+
+@servers_bp.route('/<int:server_id>/list-directory', methods=['POST'])
+@token_required
+def list_server_directory(_current_user, server_id):
+    """通过SSH列出远程服务器上的目录内容"""
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    data = request.get_json()
+    dir_path = data.get('dir_path', '/') if data else '/'
+
+    # 检查端口是否为SSH端口
+    if server.port == 3389:
+        return jsonify({'message': 'Windows远程桌面服务不支持浏览文件'}), 400
+
+    # Decrypt password
+    password = password_encryptor.decrypt(server.encrypted_password)
+
+    # Create SSH connection and list directory
+    ssh = SSHService(server.ip_address, server.port, server.username, password)
+    result = ssh.list_directory(dir_path)
+
+    if result['success']:
+        return jsonify({
+            'path': result['path'],
+            'files': result['files']
+        }), 200
+    else:
+        return jsonify({
+            'message': result['message'],
+            'error_type': result.get('error_type')
+        }), 400
+
+
+@servers_bp.route('/<int:server_id>/save-file', methods=['POST'])
+@token_required
+def save_server_file(_current_user, server_id):
+    """通过SSH保存内容到远程服务器上的文件"""
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    data = request.get_json()
+    file_path = data.get('file_path', '') if data else ''
+    content = data.get('content', '') if data else ''
+
+    if not file_path:
+        return jsonify({'message': '请提供文件路径'}), 400
+
+    # 检查端口是否为SSH端口
+    if server.port == 3389:
+        return jsonify({'message': 'Windows远程桌面服务不支持保存文件'}), 400
+
+    # Decrypt password
+    password = password_encryptor.decrypt(server.encrypted_password)
+
+    # Create SSH connection and write file
+    ssh = SSHService(server.ip_address, server.port, server.username, password)
+    result = ssh.write_remote_file(file_path, content)
+
+    if result['success']:
+        return jsonify({
+            'message': result['message'],
+            'file_path': result['file_path']
+        }), 200
+    else:
+        return jsonify({
+            'message': result['message'],
+            'error_type': result.get('error_type')
+        }), 400
+
+
+@servers_bp.route('/<int:server_id>/rdp-file', methods=['GET'])
+@token_required
+def generate_rdp_file(_current_user, server_id):
+    """生成RDP连接文件，用于一键连接Windows远程桌面
+
+    生成标准的.rdp文件，包含服务器地址、用户名等连接参数，
+    支持后台连接（不锁定远程桌面控制台会话）。
+
+    Query Parameters (optional):
+        width: 桌面宽度 (默认1920, 范围800-3840)
+        height: 桌面高度 (默认1080, 范围600-2160)
+        fullscreen: 是否全屏 (0=窗口, 1=全屏, 默认0)
+        clipboard: 是否共享剪贴板 (0=关闭, 1=开启, 默认1)
+        drives: 是否映射驱动器 (0=关闭, 1=开启, 默认0)
+        admin: 是否以管理员会话连接 (0=否, 1=是, 默认0)
+        multimon: 是否多显示器 (0=关闭, 1=开启, 默认0)
+    """
+    server = db.session.get(Server, server_id)
+
+    if not server:
+        return jsonify({'message': 'Server not found'}), 404
+
+    if server.port != 3389:
+        return jsonify({'message': '仅支持RDP端口(3389)的服务器生成连接文件'}), 400
+
+    # Parse customizable settings from query parameters
+    try:
+        width = min(max(int(request.args.get('width', 1920)), 800), 3840)
+    except (ValueError, TypeError):
+        width = 1920
+    try:
+        height = min(max(int(request.args.get('height', 1080)), 600), 2160)
+    except (ValueError, TypeError):
+        height = 1080
+    fullscreen = 1 if request.args.get('fullscreen', '0') == '1' else 0
+    clipboard = 1 if request.args.get('clipboard', '1') != '0' else 0
+    drives = 1 if request.args.get('drives', '0') == '1' else 0
+    admin_session = 1 if request.args.get('admin', '0') == '1' else 0
+    multimon = 1 if request.args.get('multimon', '0') == '1' else 0
+
+    screen_mode = 2 if fullscreen else 1  # 1=windowed, 2=fullscreen
+
+    # Build the RDP file content with settings optimized for background connection
+    rdp_lines = [
+        f'full address:s:{server.ip_address}:3389',
+        f'username:s:{server.username}',
+        f'screen mode id:i:{screen_mode}',
+        f'use multimon:i:{multimon}',
+        f'desktopwidth:i:{width}',
+        f'desktopheight:i:{height}',
+        'session bpp:i:32',
+        'compression:i:1',
+        'keyboardhook:i:2',
+        'audiocapturemode:i:0',
+        'videoplaybackmode:i:1',
+        'connection type:i:7',           # LAN
+        'networkautodetect:i:1',
+        'bandwidthautodetect:i:1',
+        'displayconnectionbar:i:1',
+        'enableworkspacereconnect:i:0',
+        'disable wallpaper:i:0',
+        'allow font smoothing:i:1',
+        'allow desktop composition:i:1',
+        'disable full window drag:i:0',
+        'disable menu anims:i:0',
+        'disable themes:i:0',
+        'disable cursor setting:i:0',
+        'bitmapcachepersistenable:i:1',
+        f'redirectclipboard:i:{clipboard}',
+        'redirectprinters:i:0',
+        'redirectcomports:i:0',
+        'redirectsmartcards:i:0',
+        f'redirectdrives:i:{drives}',
+        'autoreconnection enabled:i:1',  # Auto reconnect
+        'authentication level:i:2',
+        'prompt for credentials:i:0',    # Don't prompt (for background)
+        'negotiate security layer:i:1',
+        'remoteapplicationmode:i:0',
+        'alternate shell:s:',
+        'shell working directory:s:',
+        'gatewayhostname:s:',
+        'gatewayusagemethod:i:4',
+        'gatewaycredentialssource:i:4',
+        'gatewayprofileusagemethod:i:0',
+        'promptcredentialonce:i:0',
+        'gatewaybrokeringtype:i:0',
+        'use redirection server name:i:0',
+        'rdgiskdcproxy:i:0',
+        'kdcproxyname:s:',
+        'enablecredsspsupport:i:1',      # Enable CredSSP
+    ]
+
+    # Add admin/console session if requested
+    if admin_session:
+        rdp_lines.append('administrative session:i:1')
+
+    rdp_content = '\r\n'.join(rdp_lines) + '\r\n'
+
+    filename = f'{server.ip_address}.rdp'
+    return Response(
+        rdp_content,
+        mimetype='application/x-rdp',
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Type': 'application/x-rdp; charset=utf-8',
+        }
+    )
+
+
+@servers_bp.route('/query-id', methods=['POST'])
+@token_required
+def query_id(_current_user):
+    """运行IP查询ID脚本（只运行id.py）
+
+    流程：
+    1. 生成对应IP的ip.txt文件
+    2. 只运行id.py脚本
+    3. 返回ID结果
+
+    Request body:
+        ip_address: IP地址
+
+    Returns:
+        output: 脚本执行输出
+        success: 是否执行成功
+        id_result: 从输出中提取的ID（如果有）
+    """
+    import re as regex_module
+
+    data = request.get_json() or {}
+    ip_address = data.get('ip_address', '')
+
+    if not ip_address:
+        return jsonify({'message': '请提供IP地址', 'success': False}), 400
+
+    if not _is_valid_ip(ip_address):
+        return jsonify({'message': '无效的IP地址格式', 'success': False}), 400
+
+    # 获取Python目录路径（相对于当前文件的路径）
+    backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    python_dir = os.path.join(backend_dir, 'Python')
+
+    # 验证 Python 目录在 backend 目录下（防止目录遍历）
+    python_dir = os.path.realpath(python_dir)
+    backend_dir = os.path.realpath(backend_dir)
+    if not python_dir.startswith(backend_dir):
+        return jsonify({
+            'message': '无效的目录路径',
+            'success': False
+        }), 400
+
+    ip_file = os.path.join(python_dir, 'ip.txt')
+    id_py_file = os.path.join(python_dir, 'id.py')
+
+    # 检查id.py脚本文件是否存在
+    if not os.path.exists(id_py_file):
+        return jsonify({
+            'message': 'id.py 脚本不存在',
+            'success': False
+        }), 404
+
+    try:
+        # 1. 生成对应IP的ip.txt文件（设置受限权限 600）
+        with open(ip_file, 'w', encoding='utf-8') as f:
+            f.write(ip_address)
+        os.chmod(ip_file, 0o600)
+
+        # 2. 只运行id.py脚本
+        result = subprocess.run(
+            ['python3', id_py_file],
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 minutes timeout
+            cwd=python_dir
+        )
+
+        output = result.stdout
+        if result.stderr:
+            output += '\n' + result.stderr
+
+        # 3. 从输出中提取ID结果（格式: "前10个最小的id: [7762]" 或类似）
+        id_result = None
+        # 尝试匹配 "前N个最小的id: [数字]" 或 "[数字]" 模式
+        id_match = regex_module.search(r'前\d+个最小的id[:\s]*\[(\d+)\]', output)
+        if id_match:
+            id_result = id_match.group(1)
+        else:
+            # 尝试匹配单独的 [数字] 模式
+            id_match = regex_module.search(r'\[(\d+)\]', output)
+            if id_match:
+                id_result = id_match.group(1)
+
+        if result.returncode == 0:
+            return jsonify({
+                'message': '查询ID完成',
+                'output': output,
+                'success': True,
+                'id_result': id_result
+            }), 200
+        else:
+            return jsonify({
+                'message': '脚本执行失败',
+                'output': output,
+                'success': False,
+                'id_result': id_result
+            }), 400
+
+    except subprocess.TimeoutExpired:
+        return jsonify({
+            'message': '脚本执行超时',
+            'success': False
+        }), 408
+    except Exception as e:
+        logger.error(f"Error running query-id script: {str(e)}")
+        return jsonify({
+            'message': f'执行失败: {str(e)}',
+            'success': False
+        }), 500
