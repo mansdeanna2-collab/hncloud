@@ -1,0 +1,51 @@
+version: '3.8'
+
+# Network configuration to avoid Docker iptables issues
+# See DEPLOYMENT_OPTIONS.md troubleshooting section if you encounter network errors
+networks:
+  server-manager-net:
+    driver: bridge
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    networks:
+      - server-manager-net
+    environment:
+      - FLASK_ENV=production
+      - DEBUG=False
+      - DATABASE_URI=sqlite:///server_manager.db
+      - SERVER_FILES_DIR=/app/server_files
+      # SECURITY: For production, set secure SECRET_KEY and ENCRYPTION_KEY
+      # Generate ENCRYPTION_KEY with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      # Generate SECRET_KEY with: python -c "import secrets; print(secrets.token_hex(32))"
+      # Uncomment and set secure values for production:
+      # - SECRET_KEY=your-generated-secret-key-here
+      # - ENCRYPTION_KEY=your-generated-encryption-key-here
+      # - JWT_SECRET_KEY=your-generated-jwt-secret-key-here
+    volumes:
+      - ./backend:/app
+      - backend_data:/app/instance
+      # Mount host server files directory - set SERVER_FILES_HOST_DIR env var or use ./server_files
+      - ${SERVER_FILES_HOST_DIR:-./server_files}:/app/server_files:ro
+    command: python app.py
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    networks:
+      - server-manager-net
+    depends_on:
+      - backend
+    environment:
+      - VITE_API_BASE_URL=http://localhost:5000/api
+
+volumes:
+  backend_data:

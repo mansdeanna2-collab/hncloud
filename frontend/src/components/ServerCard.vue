@@ -1,0 +1,110 @@
+<template>
+  <el-card
+    class="server-card"
+    shadow="hover"
+  >
+    <template #header>
+      <div class="card-header">
+        <span class="server-name">{{ server.ip_address }}</span>
+        <StatusBadge
+          :status="server.status"
+          :detail="server.checkDetail"
+          :error-type="server.error_type"
+        />
+      </div>
+    </template>
+    <div class="server-info">
+      <div class="info-item">
+        <el-icon><Connection /></el-icon>
+        <span>端口：{{ server.port }}</span>
+      </div>
+      <div class="info-item">
+        <el-icon><User /></el-icon>
+        <span>用户：{{ server.username }}</span>
+      </div>
+      <div
+        v-if="server.os_info"
+        class="info-item"
+      >
+        <el-icon><Monitor /></el-icon>
+        <span>{{ server.os_info }}</span>
+      </div>
+      <div
+        v-if="server.notes"
+        class="info-item"
+      >
+        <el-icon><Document /></el-icon>
+        <span>{{ server.notes }}</span>
+      </div>
+    </div>
+    <div class="card-actions">
+      <el-button
+        size="small"
+        @click="$emit('view', server)"
+      >
+        <el-icon><View /></el-icon>
+        查看
+      </el-button>
+      <el-button
+        size="small"
+        type="primary"
+        @click="$emit('check', server)"
+      >
+        <el-icon><Refresh /></el-icon>
+        检测
+      </el-button>
+    </div>
+  </el-card>
+</template>
+
+<script setup>
+import StatusBadge from '@/components/StatusBadge.vue'
+import { Connection, User, Monitor, Document, View, Refresh } from '@element-plus/icons-vue'
+
+defineProps({
+  server: {
+    type: Object,
+    required: true
+  }
+})
+
+defineEmits(['view', 'check'])
+</script>
+
+<style scoped>
+.server-card {
+  margin-bottom: 20px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.server-name {
+  font-weight: bold;
+  font-size: 16px;
+}
+
+.server-info {
+  margin: 15px 0;
+}
+
+.info-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 8px;
+  color: #606266;
+}
+
+.info-item .el-icon {
+  margin-right: 8px;
+}
+
+.card-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+</style>

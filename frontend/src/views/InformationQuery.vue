@@ -1,0 +1,2784 @@
+<template>
+  <div class="page-container">
+    <el-container>
+      <el-header class="header-container">
+        <div class="header-logo">
+          <el-icon :size="30">
+            <Monitor />
+          </el-icon>
+          <h2>服务器管理</h2>
+        </div>
+        <el-menu
+          mode="horizontal"
+          :default-active="activeMenu"
+          background-color="transparent"
+          text-color="#fff"
+          active-text-color="#fff"
+          class="header-menu"
+          @select="handleMenuSelect"
+        >
+          <el-menu-item index="/dashboard">
+            <el-icon><Odometer /></el-icon>
+            仪表盘
+          </el-menu-item>
+          <el-menu-item index="/servers">
+            <el-icon><OfficeBuilding /></el-icon>
+            服务器
+          </el-menu-item>
+          <el-sub-menu index="main-program">
+            <template #title>
+              <el-icon><Setting /></el-icon>
+              主程序功能
+            </template>
+            <el-menu-item index="/information-query">
+              <el-icon><Search /></el-icon>
+              信息查询
+            </el-menu-item>
+            <el-menu-item index="/system-backup">
+              <el-icon><FolderOpened /></el-icon>
+              系统备份
+            </el-menu-item>
+            <el-menu-item index="/system-settings">
+              <el-icon><Tools /></el-icon>
+              系统设置
+            </el-menu-item>
+          </el-sub-menu>
+        </el-menu>
+        <el-dropdown @command="handleCommand">
+          <span class="user-dropdown">
+            <el-icon><User /></el-icon>
+            {{ currentUser?.username || '管理员' }}
+            <el-icon><ArrowDown /></el-icon>
+          </span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="changePassword">
+                修改密码
+              </el-dropdown-item>
+              <el-dropdown-item command="logout">
+                退出登录
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </el-header>
+      
+      <el-main class="main-content">
+        <div class="content-wrapper">
+          <el-card class="info-card">
+            <template #header>
+              <div class="card-header">
+                <div class="card-header-title">
+                  <el-icon
+                    class="card-header-icon"
+                    :size="20"
+                  >
+                    <Search />
+                  </el-icon>
+                  <span>信息查询 - IP段配置</span>
+                </div>
+                <div class="card-header-buttons">
+                  <el-button
+                    type="primary"
+                    :loading="loading"
+                    @click="loadServers"
+                  >
+                    <el-icon><Refresh /></el-icon>
+                    刷新数据
+                  </el-button>
+                  <el-button
+                    type="warning"
+                    :loading="updatingCookie"
+                    @click="handleUpdateCookie"
+                  >
+                    <el-icon><RefreshRight /></el-icon>
+                    更新Cookie
+                  </el-button>
+                </div>
+              </div>
+            </template>
+            
+            <div class="info-content">
+              <!-- Loading State -->
+              <div
+                v-if="loading"
+                class="loading-container"
+              >
+                <el-icon
+                  class="loading-icon"
+                  :size="40"
+                >
+                  <Loading />
+                </el-icon>
+                <p class="loading-text">
+                  正在加载数据...
+                </p>
+              </div>
+
+              <!-- Error State -->
+              <el-result
+                v-else-if="loadError"
+                icon="error"
+                title="加载失败"
+                :sub-title="loadError"
+              >
+                <template #extra>
+                  <el-button
+                    type="primary"
+                    @click="loadServers"
+                  >
+                    <el-icon><Refresh /></el-icon>
+                    重新加载
+                  </el-button>
+                </template>
+              </el-result>
+
+              <!-- Empty State -->
+              <el-empty
+                v-else-if="ipSegments.length === 0"
+                description="暂无服务器数据"
+              />
+
+              <!-- IP Segment List -->
+              <div
+                v-else
+                class="segment-list"
+              >
+                <div class="segment-stats">
+                  <el-tag
+                    type="info"
+                    size="large"
+                    effect="dark"
+                  >
+                    共 {{ ipSegments.length }} 个IP段
+                  </el-tag>
+                  <el-tag
+                    type="success"
+                    size="large"
+                    effect="dark"
+                  >
+                    共 {{ totalServers }} 台服务器
+                  </el-tag>
+                </div>
+
+                <el-table
+                  :data="paginatedSegments"
+                  style="width: 100%"
+                  stripe
+                  border
+                >
+                  <el-table-column
+                    label="IP段"
+                    width="180"
+                  >
+                    <template #default="scope">
+                      <span class="ip-segment-text">{{ scope.row.segment }}.x</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column
+                    prop="count"
+                    label="服务器数量"
+                    width="120"
+                    align="center"
+                  >
+                    <template #default="scope">
+                      <el-tag
+                        type="primary"
+                        effect="plain"
+                      >
+                        {{ scope.row.count }} 台
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column
+                    label="在线状态"
+                    width="340"
+                    align="center"
+                  >
+                    <template #default="scope">
+                      <div class="status-tags">
+                        <el-tag
+                          v-if="scope.row.onlineCount > 0"
+                          type="success"
+                          size="small"
+                        >
+                          在线 {{ scope.row.onlineCount }}
+                        </el-tag>
+                        <el-tag
+                          v-if="scope.row.offlineCount > 0"
+                          type="danger"
+                          size="small"
+                        >
+                          离线 {{ scope.row.offlineCount }}
+                        </el-tag>
+                        <el-tag
+                          v-if="scope.row.unknownCount > 0"
+                          type="info"
+                          size="small"
+                        >
+                          未知 {{ scope.row.unknownCount }}
+                        </el-tag>
+                        <el-tag
+                          v-if="scope.row.batchOnlineCount > 0"
+                          color="#10b981"
+                          size="small"
+                          effect="dark"
+                        >
+                          查询在线 {{ scope.row.batchOnlineCount }}
+                        </el-tag>
+                        <el-tag
+                          v-if="scope.row.batchErrorCount > 0"
+                          color="#f43f5e"
+                          size="small"
+                          effect="dark"
+                        >
+                          查询错误 {{ scope.row.batchErrorCount }}
+                        </el-tag>
+                      </div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column
+                    label="备注"
+                    min-width="200"
+                  >
+                    <template #default="scope">
+                      <span
+                        v-if="scope.row.note"
+                        class="segment-note"
+                      >{{ scope.row.note }}</span>
+                      <span
+                        v-else
+                        class="no-note"
+                      >暂无备注</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column
+                    label="IP范围"
+                    min-width="180"
+                  >
+                    <template #default="scope">
+                      <span class="ip-range">{{ scope.row.segment }}.1 - {{ scope.row.segment }}.255</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column
+                    label="操作"
+                    width="310"
+                    align="center"
+                  >
+                    <template #default="scope">
+                      <div class="segment-operation-buttons">
+                        <el-button
+                          type="primary"
+                          size="small"
+                          @click="showIpListDialog(scope.row)"
+                        >
+                          <el-icon><View /></el-icon>
+                          查看
+                        </el-button>
+                        <template v-if="batchQueryTasks[scope.row.segment]?.status === 'running'">
+                          <el-button
+                            type="warning"
+                            size="small"
+                            @click="handleBatchQuery(scope.row)"
+                          >
+                            <el-icon><Odometer /></el-icon>
+                            {{ getBatchQueryProgressText(scope.row.segment) }}
+                          </el-button>
+                          <el-button
+                            type="danger"
+                            size="small"
+                            @click="stopBatchQueryFromRow(scope.row.segment)"
+                          >
+                            <el-icon><CircleClose /></el-icon>
+                            停止
+                          </el-button>
+                        </template>
+                        <el-button
+                          v-else
+                          :type="getBatchQueryButtonType(scope.row.segment)"
+                          size="small"
+                          @click="handleBatchQuery(scope.row)"
+                        >
+                          <el-icon><Promotion /></el-icon>
+                          {{ getBatchQueryButtonText(scope.row.segment) }}
+                        </el-button>
+                      </div>
+                    </template>
+                  </el-table-column>
+                </el-table>
+
+                <div
+                  v-if="ipSegments.length > PAGE_SIZE"
+                  class="pagination-container"
+                >
+                  <el-pagination
+                    v-model:current-page="currentPage"
+                    :page-size="PAGE_SIZE"
+                    :total="ipSegments.length"
+                    layout="prev, pager, next"
+                    background
+                  />
+                </div>
+              </div>
+            </div>
+          </el-card>
+        </div>
+      </el-main>
+    </el-container>
+    
+    <!-- Change Password Dialog -->
+    <el-dialog
+      v-model="passwordDialogVisible"
+      title="修改密码"
+      width="400px"
+    >
+      <el-form
+        ref="passwordFormRef"
+        :model="passwordForm"
+        :rules="passwordRules"
+        label-width="80px"
+      >
+        <el-form-item
+          label="旧密码"
+          prop="old_password"
+        >
+          <el-input
+            v-model="passwordForm.old_password"
+            type="password"
+            placeholder="请输入旧密码"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item
+          label="新密码"
+          prop="new_password"
+        >
+          <el-input
+            v-model="passwordForm.new_password"
+            type="password"
+            placeholder="请输入新密码（至少6位）"
+            show-password
+          />
+        </el-form-item>
+        <el-form-item
+          label="确认密码"
+          prop="confirm_password"
+        >
+          <el-input
+            v-model="passwordForm.confirm_password"
+            type="password"
+            placeholder="请再次输入新密码"
+            show-password
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">
+          取消
+        </el-button>
+        <el-button
+          type="primary"
+          :loading="changingPassword"
+          @click="handleChangePassword"
+        >
+          确认修改
+        </el-button>
+      </template>
+    </el-dialog>
+    
+    <!-- IP List Dialog -->
+    <el-dialog
+      v-model="ipListDialogVisible"
+      :title="ipListDialogTitle"
+      width="1200px"
+      class="ip-list-dialog"
+    >
+      <div class="ip-list-content">
+        <div class="ip-list-stats">
+          <el-tag
+            :class="{ 'ip-list-filter-active': ipListFilter === 'all' }"
+            type="info"
+            size="large"
+            :effect="ipListFilter === 'all' ? 'dark' : 'plain'"
+            class="ip-list-filter-tag"
+            @click="onIpListFilterChange('all')"
+          >
+            全部 {{ totalIpCount }}
+          </el-tag>
+          <el-tag
+            :class="{ 'ip-list-filter-active': ipListFilter === 'exists' }"
+            type="success"
+            size="large"
+            :effect="ipListFilter === 'exists' ? 'dark' : 'plain'"
+            class="ip-list-filter-tag"
+            @click="onIpListFilterChange('exists')"
+          >
+            已存在 {{ existingIpCount }}
+          </el-tag>
+          <el-tag
+            :class="{ 'ip-list-filter-active': ipListFilter === 'not_exists' }"
+            type="info"
+            size="large"
+            :effect="ipListFilter === 'not_exists' ? 'dark' : 'plain'"
+            class="ip-list-filter-tag"
+            @click="onIpListFilterChange('not_exists')"
+          >
+            未存在 {{ notExistingIpCount }}
+          </el-tag>
+          <el-tag
+            v-if="batchOnlineIpCount > 0"
+            :class="{ 'ip-list-filter-active': ipListFilter === 'batch_online' }"
+            color="#10b981"
+            size="large"
+            :effect="ipListFilter === 'batch_online' ? 'dark' : 'plain'"
+            class="ip-list-filter-tag"
+            @click="onIpListFilterChange('batch_online')"
+          >
+            查询在线 {{ batchOnlineIpCount }}
+          </el-tag>
+          <el-tag
+            v-if="batchErrorIpCount > 0"
+            :class="{ 'ip-list-filter-active': ipListFilter === 'batch_error' }"
+            color="#f43f5e"
+            size="large"
+            :effect="ipListFilter === 'batch_error' ? 'dark' : 'plain'"
+            class="ip-list-filter-tag"
+            @click="onIpListFilterChange('batch_error')"
+          >
+            查询错误 {{ batchErrorIpCount }}
+          </el-tag>
+        </div>
+        <el-table
+          :data="paginatedIpList"
+          style="width: 100%"
+          stripe
+          border
+          max-height="400"
+        >
+          <el-table-column
+            label="IP地址"
+            width="150"
+          >
+            <template #default="scope">
+              <span
+                :class="['ip-address', scope.row.exists ? 'ip-exists' : 'ip-not-exists']"
+              >{{ scope.row.ip }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="状态"
+            width="280"
+            align="center"
+          >
+            <template #default="scope">
+              <div class="status-cell">
+                <el-tag
+                  :type="scope.row.exists ? 'success' : 'info'"
+                  size="small"
+                >
+                  {{ scope.row.exists ? '已存在' : '未存在' }}
+                </el-tag>
+                <!-- Show source tag for batch query servers -->
+                <template v-if="scope.row.source === 'batch_online'">
+                  <span class="status-separator">/</span>
+                  <el-tag
+                    color="#10b981"
+                    size="small"
+                    effect="dark"
+                  >
+                    一键查询在线
+                  </el-tag>
+                </template>
+                <template v-else-if="scope.row.source === 'batch_error'">
+                  <span class="status-separator">/</span>
+                  <el-tag
+                    color="#f43f5e"
+                    size="small"
+                    effect="dark"
+                  >
+                    一键查询错误
+                  </el-tag>
+                </template>
+                <!-- Show online status for all IPs that have been checked -->
+                <template v-if="scope.row.portChecked || scope.row.pingChecked">
+                  <span class="status-separator">/</span>
+                  <el-tag
+                    :type="(scope.row.pingOnline || scope.row.port22 || scope.row.port3389) ? 'success' : 'danger'"
+                    size="small"
+                  >
+                    {{ (scope.row.pingOnline || scope.row.port22 || scope.row.port3389) ? '在线' : '离线' }}
+                  </el-tag>
+                  <template v-if="scope.row.exists && scope.row.errorType">
+                    <span class="status-separator">/</span>
+                    <el-tag
+                      type="danger"
+                      size="small"
+                    >
+                      {{ getErrorTypeText(scope.row.errorType) }}
+                    </el-tag>
+                  </template>
+                </template>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="Ping/端口 22/3389"
+            width="180"
+            align="center"
+          >
+            <template #default="scope">
+              <div class="port-status-cell">
+                <span
+                  v-if="scope.row.checking"
+                  class="port-checking"
+                >
+                  <el-icon class="is-loading"><Loading /></el-icon>
+                </span>
+                <template v-else-if="scope.row.portChecked || scope.row.pingChecked">
+                  <span :class="['port-text', scope.row.pingOnline ? 'port-open-ping' : 'port-closed']">P</span>
+                  <span class="port-separator">/</span>
+                  <span :class="['port-text', scope.row.port22 ? 'port-open-ssh' : 'port-closed']">22</span>
+                  <span class="port-separator">/</span>
+                  <span :class="['port-text', scope.row.port3389 ? 'port-open-rdp' : 'port-closed']">3389</span>
+                </template>
+                <span
+                  v-else
+                  class="port-unchecked"
+                >-</span>
+              </div>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="ID"
+            width="100"
+            align="center"
+          >
+            <template #default="scope">
+              <span
+                v-if="scope.row.queryingId"
+                class="id-querying"
+              >
+                <el-icon class="is-loading"><Loading /></el-icon>
+              </span>
+              <span
+                v-else-if="scope.row.idResult"
+                class="id-result"
+              >{{ scope.row.idResult }}</span>
+              <span
+                v-else
+                class="id-unchecked"
+              >-</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="备注"
+            min-width="180"
+          >
+            <template #default="scope">
+              <span
+                v-if="scope.row.exists"
+                class="ip-note"
+              >{{ scope.row.note || '暂无备注' }}</span>
+              <span
+                v-else
+                class="ip-not-exists-note"
+              >{{ scope.row.note }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column
+            label="操作"
+            width="340"
+            align="center"
+            fixed="right"
+          >
+            <template #default="scope">
+              <div class="operation-buttons">
+                <el-button
+                  type="warning"
+                  size="small"
+                  :loading="scope.row.checking"
+                  :disabled="scope.row.checking || scope.row.queryingId || scope.row.fetchingServer"
+                  @click="checkSingleIpStatus(scope.row)"
+                >
+                  <el-icon v-if="!scope.row.checking">
+                    <Search />
+                  </el-icon>
+                  检测
+                </el-button>
+                <el-button
+                  type="success"
+                  size="small"
+                  :loading="scope.row.queryingId"
+                  :disabled="scope.row.checking || scope.row.queryingId || scope.row.fetchingServer"
+                  @click="queryIdForIp(scope.row)"
+                >
+                  <el-icon v-if="!scope.row.queryingId">
+                    <Key />
+                  </el-icon>
+                  查询id
+                </el-button>
+                <el-button
+                  type="primary"
+                  size="small"
+                  :loading="scope.row.fetchingServer"
+                  :disabled="scope.row.checking || scope.row.queryingId || scope.row.fetchingServer"
+                  @click="fetchServerForIp(scope.row)"
+                >
+                  <el-icon v-if="!scope.row.fetchingServer">
+                    <Download />
+                  </el-icon>
+                  获取服务器
+                </el-button>
+                <el-button
+                  type="info"
+                  size="small"
+                  :disabled="!scope.row.logOutput"
+                  @click="showLogDialog(scope.row)"
+                >
+                  <el-icon><Document /></el-icon>
+                  日志
+                </el-button>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div
+          v-if="filteredIpList.length > IP_LIST_PAGE_SIZE"
+          class="ip-list-pagination"
+        >
+          <el-pagination
+            v-model:current-page="ipListCurrentPage"
+            :page-size="IP_LIST_PAGE_SIZE"
+            :total="filteredIpList.length"
+            layout="prev, pager, next"
+            background
+          />
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button
+            type="warning"
+            :loading="checkingIpStatus"
+            @click="checkAllIpStatus"
+          >
+            <el-icon><Search /></el-icon>
+            {{ allIpsChecked ? '重新检查状态' : '检查状态' }}
+          </el-button>
+          <el-button
+            type="primary"
+            @click="ipListDialogVisible = false"
+          >
+            关闭
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+    
+    <!-- Log Output Dialog -->
+    <el-dialog
+      v-model="logDialogVisible"
+      :title="logDialogTitle"
+      width="800px"
+      class="log-dialog"
+    >
+      <div class="log-content">
+        <pre class="log-output">{{ processedLogDialogContent }}</pre>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button
+            type="primary"
+            @click="logDialogVisible = false"
+          >
+            关闭
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- Batch Query Progress Dialog -->
+    <el-dialog
+      v-model="batchQueryDialogVisible"
+      :title="batchQueryDialogTitle"
+      width="800px"
+      class="batch-query-dialog"
+      @close="onBatchQueryDialogClose"
+    >
+      <div
+        v-if="currentBatchQueryTask"
+        class="batch-query-content"
+      >
+        <div class="batch-query-stats">
+          <el-tag
+            type="info"
+            size="large"
+            effect="dark"
+          >
+            进度 {{ currentBatchQueryTask.current_ip_index }}/{{ IP_RANGE_MAX }}
+          </el-tag>
+          <el-tag
+            type="success"
+            size="large"
+            effect="dark"
+          >
+            在线 {{ currentBatchQueryTask.total_online }}
+          </el-tag>
+          <el-tag
+            type="danger"
+            size="large"
+            effect="dark"
+          >
+            错误 {{ currentBatchQueryTask.total_error }}
+          </el-tag>
+          <el-tag
+            type="warning"
+            size="large"
+            effect="dark"
+          >
+            跳过 {{ currentBatchQueryTask.total_skipped }}
+          </el-tag>
+        </div>
+        <el-progress
+          :percentage="Math.round((currentBatchQueryTask.current_ip_index / IP_RANGE_MAX) * 100)"
+          :status="currentBatchQueryTask.status === 'completed' ? 'success' : currentBatchQueryTask.status === 'failed' ? 'exception' : ''"
+          :stroke-width="20"
+          style="margin: 15px 0"
+        />
+        <div class="batch-query-log">
+          <pre class="log-output">{{ processedBatchQueryLog }}</pre>
+        </div>
+      </div>
+      <template #footer>
+        <div class="dialog-footer">
+          <el-button
+            v-if="currentBatchQueryTask?.status === 'running'"
+            type="danger"
+            :loading="batchQueryStopping"
+            :disabled="batchQueryStopping"
+            @click="stopBatchQuery"
+          >
+            {{ batchQueryStopping ? '正在停止...' : '停止查询' }}
+          </el-button>
+          <el-button
+            type="primary"
+            @click="batchQueryDialogVisible = false"
+          >
+            关闭
+          </el-button>
+        </div>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  ArrowDown, Monitor, Odometer, OfficeBuilding, Search, User, Setting, FolderOpened, Refresh, Loading, View, Key, Document, Download, RefreshRight, Tools, Promotion, CircleClose
+} from '@element-plus/icons-vue'
+import { authAPI, serversAPI, preferencesAPI, batchQueryAPI } from '@/api'
+import { io } from 'socket.io-client'
+
+const router = useRouter()
+const route = useRoute()
+const currentUser = ref(null)
+const passwordDialogVisible = ref(false)
+const changingPassword = ref(false)
+const passwordFormRef = ref(null)
+const loading = ref(false)
+const loadError = ref('')
+const servers = ref([])
+const currentPage = ref(1)
+const PAGE_SIZE = 15
+
+// IP列表对话框相关
+const ipListDialogVisible = ref(false)
+const ipListDialogTitle = ref('')
+const currentIpList = ref([])
+const ipListCurrentPage = ref(1)
+const ipListFilter = ref('all') // 'all' | 'exists' | 'not_exists' | 'batch_online' | 'batch_error'
+const IP_LIST_PAGE_SIZE = 50
+const checkingIpStatus = ref(false)
+const BATCH_QUERY_POLL_INTERVAL = 3000  // Poll every 3 seconds
+const IP_RANGE_MAX = 255  // IP segment range: 1-255
+
+// 更新Cookie状态
+const updatingCookie = ref(false)
+
+// IP未存在时的备注文本
+const NOT_EXISTS_NOTE = '未存在'
+
+// IP段备注（从服务器加载）
+const segmentNotes = ref({})
+
+// IP检测状态（从服务器加载）
+const savedIpCheckStatus = ref({})
+
+// ID查询结果（从服务器加载）
+const savedIpIdResults = ref({})
+
+// 获取服务器任务状态（从服务器加载，用于持久化日志和进度）
+const savedFetchServerTasks = ref({})
+
+// 日志对话框相关
+const logDialogVisible = ref(false)
+const logDialogTitle = ref('')
+const logDialogContent = ref('')
+
+// 一键查询相关
+const batchQueryTasks = ref({})
+const batchQueryDialogVisible = ref(false)
+const batchQueryDialogTitle = ref('')
+const currentBatchQuerySegment = ref('')
+const batchQueryStopping = ref(false)
+let batchQueryPollTimer = null
+let batchQueryBackgroundPollTimer = null
+let batchQueryPollErrorCount = 0
+const BATCH_QUERY_MAX_POLL_ERRORS = 10
+
+// 检测是否是tqdm进度条行
+// tqdm format: "prefix:  XX%|███████   | N/M [time<remaining, rate]"
+const isTqdmProgressLine = (line) => {
+  // Match tqdm pattern: contains percentage and progress bar characters
+  return /\d+%\|[█▏▎▍▌▋▊▉ ]*\|/.test(line) || /\d+%\|[ ]*\|/.test(line)
+}
+
+// 获取tqdm行的前缀（用于分组）
+const getTqdmPrefix = (line) => {
+  const match = line.match(/^(.+?):\s*\d+%\|/)
+  return match ? match[1] : null
+}
+
+// 处理tqdm进度条输出，正确处理\r回车符和进度条更新
+// tqdm uses \r to overwrite the current line in terminal
+// This function processes the log output to show only the final state of each overwritten line
+// and consolidates multiple progress bar updates into just the final state
+const processLogContent = (content) => {
+  if (!content) return ''
+  
+  // Split by newlines, keeping track of lines
+  const lines = content.split('\n')
+  const processedLines = []
+  
+  // Track the last progress line for each prefix
+  const progressLinesByPrefix = new Map()
+  const progressLineOrder = [] // Track order of first occurrence
+  
+  for (const line of lines) {
+    let processedLine = line
+    
+    // If line contains \r, only keep the content after the last \r
+    // This simulates terminal behavior where \r moves cursor to beginning of line
+    if (line.includes('\r')) {
+      const parts = line.split('\r')
+      // Get the last non-empty part (after the last \r)
+      for (let i = parts.length - 1; i >= 0; i--) {
+        if (parts[i].trim()) {
+          processedLine = parts[i]
+          break
+        }
+      }
+      if (!processedLine.trim()) {
+        continue // Skip empty lines after \r processing
+      }
+    }
+    
+    // Check if this is a tqdm progress line
+    if (isTqdmProgressLine(processedLine)) {
+      const prefix = getTqdmPrefix(processedLine)
+      if (prefix) {
+        // Only keep the latest progress line for each prefix
+        if (!progressLinesByPrefix.has(prefix)) {
+          progressLineOrder.push(prefix)
+        }
+        progressLinesByPrefix.set(prefix, processedLine)
+        continue
+      }
+    }
+    
+    // For non-progress lines, flush any pending progress and add the line
+    // This ensures progress lines appear in their original position relative to other content
+    for (const p of progressLineOrder) {
+      if (progressLinesByPrefix.has(p)) {
+        processedLines.push(progressLinesByPrefix.get(p))
+        progressLinesByPrefix.delete(p)
+      }
+    }
+    progressLineOrder.length = 0
+    
+    processedLines.push(processedLine)
+  }
+  
+  // Flush any remaining progress lines at the end
+  for (const p of progressLineOrder) {
+    if (progressLinesByPrefix.has(p)) {
+      processedLines.push(progressLinesByPrefix.get(p))
+    }
+  }
+  
+  return processedLines.join('\n')
+}
+
+// Computed property for processed log content display
+const processedLogDialogContent = computed(() => {
+  return processLogContent(logDialogContent.value)
+})
+
+// WebSocket连接
+let queryIdSocket = null
+let fetchServerSocket = null
+
+const passwordForm = reactive({
+  old_password: '',
+  new_password: '',
+  confirm_password: ''
+})
+const passwordRules = {
+  old_password: [
+    { required: true, message: '请输入旧密码', trigger: 'blur' }
+  ],
+  new_password: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 6, message: '密码长度不能少于6个字符', trigger: 'blur' }
+  ],
+  confirm_password: [
+    { required: true, message: '请再次输入新密码', trigger: 'blur' },
+    {
+      validator: (_rule, value, callback) => {
+        if (value !== passwordForm.new_password) {
+          callback(new Error('两次输入的密码不一致'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur'
+    }
+  ]
+}
+
+const activeMenu = computed(() => route.path)
+
+// 获取IP段（前3个字节）
+const getIpSegment = (ipAddress) => {
+  if (!ipAddress || typeof ipAddress !== 'string') {
+    return ''
+  }
+  const parts = ipAddress.split('.')
+  if (parts.length >= 3) {
+    return `${parts[0]}.${parts[1]}.${parts[2]}`
+  }
+  return ipAddress
+}
+
+// 比较IP段（数值排序）
+const compareIpSegments = (a, b) => {
+  const partsA = a.segment.split('.').map(Number)
+  const partsB = b.segment.split('.').map(Number)
+  for (let i = 0; i < Math.min(partsA.length, partsB.length); i++) {
+    if (partsA[i] !== partsB[i]) {
+      return partsA[i] - partsB[i]
+    }
+  }
+  return partsA.length - partsB.length
+}
+
+// 按IP段分组的服务器数据
+const ipSegments = computed(() => {
+  const segmentMap = new Map()
+
+  servers.value.forEach(server => {
+    const segment = getIpSegment(server.ip_address)
+    if (!segment) return
+    
+    if (!segmentMap.has(segment)) {
+      segmentMap.set(segment, {
+        segment: segment,
+        count: 0,
+        onlineCount: 0,
+        offlineCount: 0,
+        unknownCount: 0,
+        batchOnlineCount: 0,
+        batchErrorCount: 0,
+        note: segmentNotes.value[segment] || ''
+      })
+    }
+    
+    const segmentData = segmentMap.get(segment)
+    segmentData.count++
+    
+    // 一键查询服务器单独计数，不计入常规分类
+    const isBatch = server.source === 'batch_online' || server.source === 'batch_error'
+    if (isBatch) {
+      if (server.source === 'batch_online') {
+        segmentData.batchOnlineCount++
+      } else {
+        segmentData.batchErrorCount++
+      }
+    } else if (server.status === 'online') {
+      segmentData.onlineCount++
+    } else if (server.status === 'offline') {
+      segmentData.offlineCount++
+    } else {
+      segmentData.unknownCount++
+    }
+  })
+
+  // 转换为数组并按IP段排序
+  const result = Array.from(segmentMap.values())
+  result.sort(compareIpSegments)
+  return result
+})
+
+// 服务器总数
+const totalServers = computed(() => servers.value.length)
+
+// 分页后的IP段数据
+const paginatedSegments = computed(() => {
+  const start = (currentPage.value - 1) * PAGE_SIZE
+  const end = start + PAGE_SIZE
+  return ipSegments.value.slice(start, end)
+})
+
+// IP列表统计
+const totalIpCount = computed(() => {
+  return currentIpList.value.length
+})
+
+const existingIpCount = computed(() => {
+  return currentIpList.value.filter(ip => ip.exists).length
+})
+
+const notExistingIpCount = computed(() => {
+  return currentIpList.value.filter(ip => !ip.exists).length
+})
+
+const batchOnlineIpCount = computed(() => {
+  return currentIpList.value.filter(ip => ip.source === 'batch_online').length
+})
+
+const batchErrorIpCount = computed(() => {
+  return currentIpList.value.filter(ip => ip.source === 'batch_error').length
+})
+
+// 是否所有IP都已检查过（用于区分"检查状态"和"重新检查"按钮文本）
+const allIpsChecked = computed(() => {
+  return currentIpList.value.length > 0 && currentIpList.value.every(item => item.portChecked && item.pingChecked)
+})
+
+// 根据筛选条件过滤后的IP列表
+const filteredIpList = computed(() => {
+  const filter = ipListFilter.value
+  if (filter === 'all') return currentIpList.value
+  if (filter === 'exists') return currentIpList.value.filter(ip => ip.exists)
+  if (filter === 'not_exists') return currentIpList.value.filter(ip => !ip.exists)
+  if (filter === 'batch_online') return currentIpList.value.filter(ip => ip.source === 'batch_online')
+  if (filter === 'batch_error') return currentIpList.value.filter(ip => ip.source === 'batch_error')
+  return currentIpList.value
+})
+
+// 分页后的IP列表数据
+const paginatedIpList = computed(() => {
+  const start = (ipListCurrentPage.value - 1) * IP_LIST_PAGE_SIZE
+  const end = start + IP_LIST_PAGE_SIZE
+  return filteredIpList.value.slice(start, end)
+})
+
+// 切换IP列表筛选条件
+const onIpListFilterChange = (filter) => {
+  ipListFilter.value = filter
+  ipListCurrentPage.value = 1
+}
+
+// 显示IP列表对话框
+const showIpListDialog = async (segmentData) => {
+  const segment = segmentData.segment
+  ipListDialogTitle.value = `IP段详情: ${segment}.1 - ${segment}.255`
+  ipListCurrentPage.value = 1
+  ipListFilter.value = 'all'
+  
+  // 构建该IP段内所有服务器的IP映射，方便快速查找
+  const serverIpMap = new Map()
+  servers.value.forEach(server => {
+    const serverSegment = getIpSegment(server.ip_address)
+    if (serverSegment === segment) {
+      serverIpMap.set(server.ip_address, server)
+    }
+  })
+  
+  // 生成1-255的IP列表
+  const ipList = []
+  for (let i = 1; i <= 255; i++) {
+    const ip = `${segment}.${i}`
+    const server = serverIpMap.get(ip)
+    const savedStatus = savedIpCheckStatus.value[ip] || null
+    const savedIdResult = savedIpIdResults.value[ip] || null
+    const savedFetchTask = savedFetchServerTasks.value[ip] || null
+    
+    // Use fetch task log if available and more recent, or fallback to ID result log
+    const logOutput = savedFetchTask?.log_output || savedIdResult?.logOutput || null
+    // Check if fetch task is still running
+    const isTaskRunning = savedFetchTask?.status === 'running'
+    
+    if (server) {
+      ipList.push({
+        ip: ip,
+        exists: true,
+        note: server.notes || '',
+        onlineStatus: server.status || null,
+        errorType: server.error_type || null,
+        source: server.source || null,
+        checking: false,
+        queryingId: false,
+        fetchingServer: isTaskRunning,
+        portChecked: savedStatus?.portChecked || false,
+        pingChecked: savedStatus?.pingChecked || false,
+        pingOnline: savedStatus?.pingOnline || false,
+        port22: savedStatus?.port22 || false,
+        port3389: savedStatus?.port3389 || false,
+        idResult: savedIdResult?.idResult || null,
+        logOutput: logOutput
+      })
+    } else {
+      ipList.push({
+        ip: ip,
+        exists: false,
+        note: NOT_EXISTS_NOTE,
+        onlineStatus: null,
+        errorType: null,
+        source: null,
+        checking: false,
+        queryingId: false,
+        fetchingServer: isTaskRunning,
+        portChecked: savedStatus?.portChecked || false,
+        pingChecked: savedStatus?.pingChecked || false,
+        pingOnline: savedStatus?.pingOnline || false,
+        port22: savedStatus?.port22 || false,
+        port3389: savedStatus?.port3389 || false,
+        idResult: savedIdResult?.idResult || null,
+        logOutput: logOutput
+      })
+    }
+  }
+  
+  currentIpList.value = ipList
+  ipListDialogVisible.value = true
+  
+  // Subscribe to any running tasks for this segment
+  subscribeToRunningTasks(segment)
+}
+
+// 获取错误类型文本
+const getErrorTypeText = (errorType) => {
+  const errorTypeMap = {
+    'auth_failed': '认证失败',
+    'password_error': '密码错误',
+    'unreachable': '不可达',
+    'port_closed': '端口关闭',
+    'timeout': '超时',
+    'connection_refused': '连接拒绝'
+  }
+  return errorTypeMap[errorType] || errorType || ''
+}
+
+// 保存IP检测状态到服务器数据库
+const saveIpCheckStatus = async (ip, statusData) => {
+  savedIpCheckStatus.value[ip] = {
+    portChecked: statusData.portChecked || false,
+    pingChecked: statusData.pingChecked || false,
+    pingOnline: statusData.pingOnline || false,
+    port22: statusData.port22 || false,
+    port3389: statusData.port3389 || false,
+    lastChecked: new Date().toISOString()
+  }
+  try {
+    await preferencesAPI.saveIpCheckStatus({
+      ip_address: ip,
+      port_checked: statusData.portChecked || false,
+      ping_checked: statusData.pingChecked || false,
+      ping_online: statusData.pingOnline || false,
+      port_22: statusData.port22 || false,
+      port_3389: statusData.port3389 || false
+    })
+  } catch (_e) {
+    // 忽略保存错误
+  }
+}
+
+// 检查单个IP的状态
+const checkSingleIpStatus = async (item) => {
+  item.checking = true
+  
+  try {
+    const response = await serversAPI.checkIpStatus(item.ip)
+    const data = response.data
+    item.portChecked = true
+    item.pingChecked = true
+    item.pingOnline = data.ping || false
+    item.port22 = data.port_22 || false
+    item.port3389 = data.port_3389 || false
+    
+    // 保存到服务器数据库
+    await saveIpCheckStatus(item.ip, item)
+    
+    ElMessage.success(`${item.ip} 检测完成`)
+  } catch (error) {
+    // 检查失败时，将状态设为关闭
+    item.portChecked = true
+    item.pingChecked = true
+    item.pingOnline = false
+    item.port22 = false
+    item.port3389 = false
+    
+    // 保存到服务器数据库
+    await saveIpCheckStatus(item.ip, item)
+
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn(`检查IP ${item.ip} 失败:`, error.message || error)
+    }
+    ElMessage.warning(`${item.ip} 检测失败`)
+  } finally {
+    item.checking = false
+  }
+}
+
+// 保存IP的ID结果到服务器数据库
+const saveIpIdResult = async (ip, idResult, logOutput) => {
+  savedIpIdResults.value[ip] = {
+    idResult: idResult || null,
+    logOutput: logOutput || null,
+    lastQueried: new Date().toISOString()
+  }
+  try {
+    await preferencesAPI.saveIpIdResult({
+      ip_address: ip,
+      id_result: idResult || null,
+      log_output: logOutput || null
+    })
+  } catch (_e) {
+    // 忽略保存错误
+  }
+}
+
+// 显示日志对话框
+const showLogDialog = (item) => {
+  if (item.logOutput) {
+    logDialogTitle.value = `日志输出 - ${item.ip}`
+    logDialogContent.value = item.logOutput
+    logDialogVisible.value = true
+  }
+}
+
+// 根据IP地址查找当前列表中的item
+const findItemByIp = (ipAddress) => {
+  return currentIpList.value.find(item => item.ip === ipAddress)
+}
+
+// 查询IP的ID（使用WebSocket实时流式输出）
+const queryIdForIp = (item) => {
+  item.queryingId = true
+  item.logOutput = ''  // 清空之前的日志
+  
+  // 保存IP地址，避免闭包中使用可能过期的item引用
+  const targetIp = item.ip
+  
+  const token = localStorage.getItem('token')
+  if (!token) {
+    ElMessage.error('请先登录')
+    item.queryingId = false
+    return
+  }
+
+  // 获取WebSocket URL
+  let wsUrl = import.meta.env.VITE_WS_URL
+  if (!wsUrl) {
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
+    if (apiBaseUrl && apiBaseUrl.startsWith('http')) {
+      try {
+        const url = new URL(apiBaseUrl)
+        wsUrl = url.origin
+      } catch (_e) {
+        wsUrl = window.location.origin
+      }
+    } else {
+      wsUrl = window.location.origin
+    }
+  }
+
+  // 如果已有连接，先断开
+  if (queryIdSocket) {
+    queryIdSocket.disconnect()
+  }
+
+  // 创建WebSocket连接
+  queryIdSocket = io(`${wsUrl}/query-id`, {
+    transports: ['polling', 'websocket'],
+    reconnection: false,
+    timeout: 300000  // 5 minutes timeout
+  })
+
+  queryIdSocket.on('connect', () => {
+    // 发送启动查询ID请求
+    queryIdSocket.emit('start_query_id', {
+      ip_address: targetIp,
+      token: token
+    })
+  })
+
+  queryIdSocket.on('query_id_started', (data) => {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.log(`查询ID开始: ${data.message}`)
+    }
+  })
+
+  queryIdSocket.on('query_id_output', (data) => {
+    // 实时更新日志输出
+    if (data.ip_address === targetIp) {
+      // 查找当前列表中的item（对话框可能被关闭再打开）
+      const currentItem = findItemByIp(targetIp)
+      if (currentItem) {
+        currentItem.logOutput = (currentItem.logOutput || '') + data.data
+        // 如果日志对话框正在显示此IP，实时更新内容
+        if (logDialogVisible.value && logDialogTitle.value.includes(targetIp)) {
+          logDialogContent.value = currentItem.logOutput
+        }
+      }
+    }
+  })
+
+  queryIdSocket.on('query_id_completed', async (data) => {
+    if (data.ip_address === targetIp) {
+      const idResult = data.id_result || null
+      const logOutput = data.output || ''
+      
+      // 保存到服务器数据库（无论对话框是否打开都要保存）
+      await saveIpIdResult(targetIp, idResult, logOutput)
+      
+      // 查找当前列表中的item并更新（对话框可能被关闭再打开）
+      const currentItem = findItemByIp(targetIp)
+      if (currentItem) {
+        currentItem.idResult = idResult
+        currentItem.logOutput = logOutput
+        currentItem.queryingId = false
+        
+        // 更新日志对话框内容
+        if (logDialogVisible.value && logDialogTitle.value.includes(targetIp)) {
+          logDialogContent.value = currentItem.logOutput
+        }
+      }
+      
+      if (data.success) {
+        ElMessage.success(`${targetIp} 查询ID完成`)
+      } else {
+        ElMessage.warning(`${targetIp} 查询ID失败: ${data.message || '未知错误'}`)
+      }
+      
+      // 断开WebSocket连接
+      if (queryIdSocket) {
+        queryIdSocket.disconnect()
+        queryIdSocket = null
+      }
+    }
+  })
+
+  queryIdSocket.on('query_id_error', async (data) => {
+    if (data.ip_address === targetIp || !data.ip_address) {
+      const message = data.message || '查询失败'
+      
+      // 查找当前列表中的item并更新
+      const currentItem = findItemByIp(targetIp)
+      const logOutput = currentItem ? (currentItem.logOutput || '') + '\n' + message : message
+      
+      // 保存到服务器数据库
+      await saveIpIdResult(targetIp, null, logOutput)
+      
+      if (currentItem) {
+        currentItem.logOutput = logOutput
+        currentItem.queryingId = false
+      }
+      
+      ElMessage.warning(`${targetIp} 查询ID失败: ${message}`)
+      
+      // 断开WebSocket连接
+      if (queryIdSocket) {
+        queryIdSocket.disconnect()
+        queryIdSocket = null
+      }
+    }
+  })
+
+  queryIdSocket.on('connect_error', (error) => {
+    const message = error.message || '连接失败'
+    
+    // 查找当前列表中的item并更新
+    const currentItem = findItemByIp(targetIp)
+    if (currentItem) {
+      currentItem.logOutput = message
+      currentItem.queryingId = false
+    }
+    
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn(`WebSocket连接失败: ${message}`)
+    }
+    ElMessage.warning(`${targetIp} 查询ID连接失败: ${message}`)
+    
+    queryIdSocket = null
+  })
+
+  queryIdSocket.on('disconnect', (reason) => {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.log('Query-ID WebSocket disconnected:', reason)
+    }
+    
+    // Check if the task was still running when disconnected
+    const currentItem = findItemByIp(targetIp)
+    if (currentItem && currentItem.queryingId) {
+      // Task was still running, this is an unexpected disconnect
+      currentItem.queryingId = false
+      currentItem.logOutput = (currentItem.logOutput || '') + '\n[连接已断开，任务可能仍在后台运行]'
+      
+      // Update log dialog if open
+      if (logDialogVisible.value && logDialogTitle.value.includes(targetIp)) {
+        logDialogContent.value = currentItem.logOutput
+      }
+      
+      ElMessage.warning(`${targetIp} 查询ID连接断开: ${reason || '连接丢失'}`)
+    }
+    
+    queryIdSocket = null
+  })
+}
+
+// 获取服务器（运行mm.py脚本，使用WebSocket实时流式输出）
+const fetchServerForIp = (item) => {
+  // 保存IP地址和idResult，避免闭包中使用可能过期的item引用
+  const targetIp = item.ip
+  const targetIpId = item.idResult  // 获取该IP对应的ID结果
+  
+  // 检查是否已获取ID，如果没有则提示用户先获取ID
+  if (!targetIpId) {
+    ElMessage.warning('请先获取id')
+    return
+  }
+  
+  const token = localStorage.getItem('token')
+  if (!token) {
+    ElMessage.error('请先登录')
+    return
+  }
+  
+  // 验证成功后设置状态
+  item.fetchingServer = true
+  item.logOutput = ''  // 清空之前的日志
+  
+  // 标记任务为运行中（前端状态）
+  savedFetchServerTasks.value[targetIp] = {
+    ip_address: targetIp,
+    status: 'running',
+    log_output: '',
+    servers_added: []
+  }
+
+  // 获取WebSocket URL
+  let wsUrl = import.meta.env.VITE_WS_URL
+  if (!wsUrl) {
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
+    if (apiBaseUrl && apiBaseUrl.startsWith('http')) {
+      try {
+        const url = new URL(apiBaseUrl)
+        wsUrl = url.origin
+      } catch (_e) {
+        wsUrl = window.location.origin
+      }
+    } else {
+      wsUrl = window.location.origin
+    }
+  }
+
+  // 如果已有连接，先断开
+  if (fetchServerSocket) {
+    fetchServerSocket.disconnect()
+  }
+
+  // 创建WebSocket连接
+  // Configure ping settings to match server for long-running tasks
+  // Server has ping_timeout=1200s and ping_interval=60s
+  fetchServerSocket = io(`${wsUrl}/fetch-server`, {
+    transports: ['polling', 'websocket'],
+    reconnection: false,
+    timeout: 1200000,     // 20 minutes timeout (script runs ~15 minutes)
+    pingTimeout: 1200000, // 20 minutes - match server's ping_timeout
+    pingInterval: 60000   // 60 seconds - match server's ping_interval
+  })
+
+  fetchServerSocket.on('connect', () => {
+    // 发送启动获取服务器请求，包含ipid参数
+    const requestData = {
+      ip_address: targetIp,
+      token: token
+    }
+    // 如果有ID结果，传递给后端用于更新mm.py的target_ids
+    if (targetIpId) {
+      requestData.ipid = targetIpId
+    }
+    fetchServerSocket.emit('start_fetch_server', requestData)
+  })
+
+  fetchServerSocket.on('fetch_server_started', (data) => {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.log(`获取服务器开始: ${data.message}`)
+    }
+  })
+
+  fetchServerSocket.on('fetch_server_output', (data) => {
+    // 实时更新日志输出
+    if (data.task_id === targetIp) {
+      // 查找当前列表中的item（对话框可能被关闭再打开）
+      const currentItem = findItemByIp(targetIp)
+      if (currentItem) {
+        currentItem.logOutput = (currentItem.logOutput || '') + data.data
+        // 如果日志对话框正在显示此IP，实时更新内容
+        if (logDialogVisible.value && logDialogTitle.value.includes(targetIp)) {
+          logDialogContent.value = currentItem.logOutput
+        }
+      }
+    }
+  })
+
+  fetchServerSocket.on('fetch_server_completed', async (data) => {
+    if (data.task_id === targetIp) {
+      const logOutput = data.output || ''
+      const addedServers = data.servers || []
+      
+      // 查找当前列表中的item并更新（对话框可能被关闭再打开）
+      const currentItem = findItemByIp(targetIp)
+      if (currentItem) {
+        currentItem.logOutput = logOutput
+        currentItem.fetchingServer = false
+        
+        // 更新日志对话框内容
+        if (logDialogVisible.value && logDialogTitle.value.includes(targetIp)) {
+          logDialogContent.value = currentItem.logOutput
+        }
+      }
+      
+      // 更新保存的任务状态
+      savedFetchServerTasks.value[targetIp] = {
+        ...savedFetchServerTasks.value[targetIp],
+        status: data.success ? 'completed' : 'failed',
+        log_output: logOutput,
+        servers_added: addedServers
+      }
+      
+      if (data.success) {
+        if (addedServers.length > 0) {
+          ElMessage.success(`获取服务器完成，新增 ${addedServers.length} 台服务器`)
+          // 刷新服务器列表
+          await loadServers()
+        } else {
+          ElMessage.success('获取服务器完成，无新增服务器')
+        }
+      } else {
+        ElMessage.warning(`获取服务器失败: ${data.message || '未知错误'}`)
+      }
+      
+      // 断开WebSocket连接
+      if (fetchServerSocket) {
+        fetchServerSocket.disconnect()
+        fetchServerSocket = null
+      }
+    }
+  })
+
+  fetchServerSocket.on('fetch_server_error', (data) => {
+    if (data.task_id === targetIp || !data.task_id) {
+      const message = data.message || '获取失败'
+      
+      // 查找当前列表中的item并更新
+      const currentItem = findItemByIp(targetIp)
+      if (currentItem) {
+        currentItem.logOutput = (currentItem.logOutput || '') + '\n' + message
+        currentItem.fetchingServer = false
+      }
+      
+      // 更新保存的任务状态
+      savedFetchServerTasks.value[targetIp] = {
+        ...savedFetchServerTasks.value[targetIp],
+        status: 'error',
+        log_output: currentItem?.logOutput || message
+      }
+      
+      ElMessage.warning(`${targetIp} 获取服务器失败: ${message}`)
+      
+      // 断开WebSocket连接
+      if (fetchServerSocket) {
+        fetchServerSocket.disconnect()
+        fetchServerSocket = null
+      }
+    }
+  })
+
+  fetchServerSocket.on('connect_error', (error) => {
+    const message = error.message || '连接失败'
+    
+    // 查找当前列表中的item并更新
+    const currentItem = findItemByIp(targetIp)
+    if (currentItem) {
+      currentItem.logOutput = message
+      currentItem.fetchingServer = false
+    }
+    
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn(`WebSocket连接失败: ${message}`)
+    }
+    ElMessage.warning(`${targetIp} 获取服务器连接失败: ${message}`)
+    
+    fetchServerSocket = null
+  })
+
+  fetchServerSocket.on('disconnect', (reason) => {
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.log('Fetch-Server WebSocket disconnected:', reason)
+    }
+    
+    // Check if the task was still running when disconnected
+    const currentItem = findItemByIp(targetIp)
+    if (currentItem && currentItem.fetchingServer) {
+      // Task was still running, this is an unexpected disconnect
+      currentItem.fetchingServer = false
+      currentItem.logOutput = (currentItem.logOutput || '') + '\n[连接已断开，任务可能仍在后台运行]'
+      
+      // Update log dialog if open
+      if (logDialogVisible.value && logDialogTitle.value.includes(targetIp)) {
+        logDialogContent.value = currentItem.logOutput
+      }
+      
+      ElMessage.warning(`${targetIp} 获取服务器连接断开: ${reason || '连接丢失'}`)
+    }
+    
+    fetchServerSocket = null
+  })
+}
+
+// 订阅正在运行的任务（用于对话框重新打开时恢复进度）
+// Uses a single shared WebSocket connection for all running tasks to avoid resource exhaustion
+let subscribeSocket = null
+
+const subscribeToRunningTasks = (segment) => {
+  // Find all running tasks for this segment from saved state
+  const runningTasks = []
+  for (let i = 1; i <= 255; i++) {
+    const ip = `${segment}.${i}`
+    const savedTask = savedFetchServerTasks.value[ip]
+    if (savedTask && savedTask.status === 'running') {
+      runningTasks.push(ip)
+    }
+  }
+  
+  if (runningTasks.length === 0) {
+    return
+  }
+  
+  const token = localStorage.getItem('token')
+  if (!token) {
+    return
+  }
+  
+  // Get WebSocket URL
+  let wsUrl = import.meta.env.VITE_WS_URL
+  if (!wsUrl) {
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL
+    if (apiBaseUrl && apiBaseUrl.startsWith('http')) {
+      try {
+        const url = new URL(apiBaseUrl)
+        wsUrl = url.origin
+      } catch (_e) {
+        wsUrl = window.location.origin
+      }
+    } else {
+      wsUrl = window.location.origin
+    }
+  }
+  
+  // Use a single shared socket connection for all running tasks
+  // Disconnect previous subscription socket if exists
+  if (subscribeSocket) {
+    subscribeSocket.disconnect()
+  }
+  
+  subscribeSocket = io(`${wsUrl}/fetch-server`, {
+    transports: ['polling', 'websocket'],
+    reconnection: true,
+    timeout: 1200000,
+    pingTimeout: 1200000,
+    pingInterval: 60000
+  })
+  
+  // Track active subscriptions
+  const activeSubscriptions = new Set(runningTasks)
+  
+  subscribeSocket.on('connect', () => {
+    // Subscribe to all running tasks
+    for (const taskIp of runningTasks) {
+      subscribeSocket.emit('subscribe_task', {
+        task_id: taskIp,
+        token: token
+      })
+    }
+  })
+  
+  subscribeSocket.on('task_subscribed', (data) => {
+    const taskIp = data.task_id
+    if (activeSubscriptions.has(taskIp)) {
+      const currentItem = findItemByIp(taskIp)
+      if (currentItem) {
+        if (data.status === 'running') {
+          currentItem.fetchingServer = true
+          currentItem.logOutput = data.output || currentItem.logOutput
+        } else if (data.status === 'not_in_memory') {
+          // Task not in memory but was marked running, might have completed
+          currentItem.fetchingServer = false
+          activeSubscriptions.delete(taskIp)
+        }
+        // Update log dialog if open
+        if (logDialogVisible.value && logDialogTitle.value.includes(taskIp)) {
+          logDialogContent.value = currentItem.logOutput
+        }
+      }
+    }
+  })
+  
+  subscribeSocket.on('fetch_server_output', (data) => {
+    const taskIp = data.task_id
+    if (activeSubscriptions.has(taskIp)) {
+      const currentItem = findItemByIp(taskIp)
+      if (currentItem) {
+        currentItem.logOutput = (currentItem.logOutput || '') + data.data
+        if (logDialogVisible.value && logDialogTitle.value.includes(taskIp)) {
+          logDialogContent.value = currentItem.logOutput
+        }
+      }
+    }
+  })
+  
+  subscribeSocket.on('fetch_server_completed', async (data) => {
+    const taskIp = data.task_id
+    if (activeSubscriptions.has(taskIp)) {
+      const currentItem = findItemByIp(taskIp)
+      if (currentItem) {
+        currentItem.logOutput = data.output || ''
+        currentItem.fetchingServer = false
+        if (logDialogVisible.value && logDialogTitle.value.includes(taskIp)) {
+          logDialogContent.value = currentItem.logOutput
+        }
+      }
+      
+      // Update saved state
+      savedFetchServerTasks.value[taskIp] = {
+        ...savedFetchServerTasks.value[taskIp],
+        status: data.success ? 'completed' : 'failed',
+        log_output: data.output
+      }
+      
+      if (data.success && data.servers?.length > 0) {
+        ElMessage.success(`${taskIp} 获取服务器完成，新增 ${data.servers.length} 台服务器`)
+        // Only reload servers once when all subscriptions complete
+        activeSubscriptions.delete(taskIp)
+        if (activeSubscriptions.size === 0) {
+          await loadServers()
+          subscribeSocket.disconnect()
+          subscribeSocket = null
+        }
+      } else {
+        activeSubscriptions.delete(taskIp)
+        if (activeSubscriptions.size === 0 && subscribeSocket) {
+          subscribeSocket.disconnect()
+          subscribeSocket = null
+        }
+      }
+    }
+  })
+  
+  subscribeSocket.on('fetch_server_error', (data) => {
+    const taskIp = data.task_id
+    if (activeSubscriptions.has(taskIp)) {
+      const currentItem = findItemByIp(taskIp)
+      if (currentItem) {
+        currentItem.fetchingServer = false
+        currentItem.logOutput = (currentItem.logOutput || '') + '\n' + (data.message || '获取失败')
+      }
+      
+      // Update saved state
+      savedFetchServerTasks.value[taskIp] = {
+        ...savedFetchServerTasks.value[taskIp],
+        status: 'error'
+      }
+      
+      activeSubscriptions.delete(taskIp)
+      if (activeSubscriptions.size === 0 && subscribeSocket) {
+        subscribeSocket.disconnect()
+        subscribeSocket = null
+      }
+    }
+  })
+}
+
+// 检查所有IP的状态
+const checkAllIpStatus = async () => {
+  // 如果所有IP都已检查过，弹出确认对话框
+  if (allIpsChecked.value) {
+    try {
+      await ElMessageBox.confirm(
+        `所有 ${currentIpList.value.length} 个IP都已检查过。确定要重新检查所有IP的状态吗？`,
+        '确认重新检查',
+        {
+          confirmButtonText: '重新检查',
+          cancelButtonText: '取消',
+          type: 'info'
+        }
+      )
+    } catch (_e) {
+      // 用户取消
+      return
+    }
+  }
+
+  checkingIpStatus.value = true
+  
+  // 检查所有IP的状态（包括已检查过的IP，允许重新检查以更新状态）
+  const ipsToCheck = [...currentIpList.value]
+  
+  // 设置所有IP为检查中状态
+  ipsToCheck.forEach(item => {
+    item.checking = true
+  })
+  
+  // 并发检查，但限制并发数
+  const concurrencyLimit = 10
+  const chunks = []
+  for (let i = 0; i < ipsToCheck.length; i += concurrencyLimit) {
+    chunks.push(ipsToCheck.slice(i, i + concurrencyLimit))
+  }
+  
+  for (const chunk of chunks) {
+    await Promise.all(chunk.map(async (item) => {
+      try {
+        const response = await serversAPI.checkIpStatus(item.ip)
+        const data = response.data
+        item.portChecked = true
+        item.pingChecked = true
+        item.pingOnline = data.ping || false
+        item.port22 = data.port_22 || false
+        item.port3389 = data.port_3389 || false
+        
+        // 保存到服务器数据库
+        await saveIpCheckStatus(item.ip, item)
+      } catch (error) {
+        // 检查失败时，将端口状态设为关闭
+        item.portChecked = true
+        item.pingChecked = true
+        item.pingOnline = false
+        item.port22 = false
+        item.port3389 = false
+
+        // 保存到服务器数据库
+        await saveIpCheckStatus(item.ip, item)
+
+        // 记录错误以便调试（不显示给用户避免过多干扰）
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.warn(`检查IP ${item.ip} 失败:`, error.message || error)
+        }
+      } finally {
+        item.checking = false
+      }
+    }))
+  }
+
+  checkingIpStatus.value = false
+  ElMessage.success('状态检查完成')
+}
+
+// 更新Cookie
+const handleUpdateCookie = async () => {
+  updatingCookie.value = true
+  try {
+    const response = await preferencesAPI.updateCookie()
+    if (response.data.success) {
+      ElMessage.success('Cookie更新成功')
+      if (import.meta.env.DEV && response.data.output) {
+        // eslint-disable-next-line no-console
+        console.log('Cookie更新输出:', response.data.output)
+      }
+    } else {
+      ElMessage.error(`Cookie更新失败: ${response.data.message || '未知错误'}`)
+    }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '网络连接失败'
+    ElMessage.error(`Cookie更新失败: ${message}`)
+  } finally {
+    updatingCookie.value = false
+  }
+}
+
+// ============ 一键查询 (Batch Query) ============
+
+// 获取当前一键查询任务的数据
+const currentBatchQueryTask = computed(() => {
+  const seg = currentBatchQuerySegment.value
+  if (!seg) return null
+  return batchQueryTasks.value[seg] || null
+})
+
+// 处理一键查询日志
+const processedBatchQueryLog = computed(() => {
+  return processLogContent(currentBatchQueryTask.value?.log_output || '')
+})
+
+// 获取一键查询按钮文字
+const getBatchQueryButtonText = (segment) => {
+  const task = batchQueryTasks.value[segment]
+  if (!task) return '一键查询'
+  if (task.status === 'running') return '查询中...'
+  if (task.status === 'completed') return '已完成'
+  if (task.status === 'stopped') return '已停止'
+  if (task.status === 'failed') return '已失败'
+  return '一键查询'
+}
+
+// 获取一键查询按钮类型
+const getBatchQueryButtonType = (segment) => {
+  const task = batchQueryTasks.value[segment]
+  if (!task) return 'success'
+  if (task.status === 'running') return 'warning'
+  if (task.status === 'completed') return 'info'
+  if (task.status === 'stopped') return 'info'
+  if (task.status === 'failed') return 'danger'
+  return 'success'
+}
+
+// 获取运行中查询的进度文本（显示百分比）
+const getBatchQueryProgressText = (segment) => {
+  const task = batchQueryTasks.value[segment]
+  if (!task || task.status !== 'running') return '查看进度'
+  const pct = Math.round((task.current_ip_index / IP_RANGE_MAX) * 100)
+  return `进度 ${pct}%`
+}
+
+// 处理一键查询按钮点击
+const handleBatchQuery = async (segmentData) => {
+  const segment = segmentData.segment
+  const task = batchQueryTasks.value[segment]
+
+  // If task is running, show progress dialog
+  if (task && task.status === 'running') {
+    currentBatchQuerySegment.value = segment
+    batchQueryDialogTitle.value = `一键查询 - ${segment}.x`
+    batchQueryDialogVisible.value = true
+    startBatchQueryPolling(segment)
+    return
+  }
+
+  // If task is completed/stopped/failed, allow re-run or show status
+  if (task && (task.status === 'completed' || task.status === 'stopped' || task.status === 'failed')) {
+    currentBatchQuerySegment.value = segment
+    batchQueryDialogTitle.value = `一键查询 - ${segment}.x`
+    batchQueryDialogVisible.value = true
+
+    const statusText = { completed: '已完成', stopped: '已停止', failed: '已失败' }
+    // Allow user to see previous result; they can start new query from dialog
+    try {
+      await ElMessageBox.confirm(
+        `该IP段已有查询记录（${statusText[task.status] || task.status}）。\n是否重新开始一键查询？`,
+        '确认',
+        {
+          confirmButtonText: '重新查询',
+          cancelButtonText: '查看结果',
+          type: 'info'
+        }
+      )
+      // User confirmed: start new query
+      await startBatchQuery(segment)
+    } catch (_e) {
+      // User cancelled: just show current status
+    }
+    return
+  }
+
+  // Start new query
+  currentBatchQuerySegment.value = segment
+  batchQueryDialogTitle.value = `一键查询 - ${segment}.x`
+  batchQueryDialogVisible.value = true
+  await startBatchQuery(segment)
+}
+
+// 启动一键查询
+const startBatchQuery = async (segment) => {
+  try {
+    const response = await batchQueryAPI.start(segment)
+    batchQueryTasks.value[segment] = response.data
+    ElMessage.success(`开始一键查询 ${segment}.x`)
+    startBatchQueryPolling(segment)
+    startBatchQueryBackgroundPolling()
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '启动失败'
+    ElMessage.error(`一键查询启动失败: ${message}`)
+  }
+}
+
+// 停止一键查询（带重试机制）
+const STOP_MAX_RETRIES = 3
+const STOP_RETRY_DELAY = 1000
+
+const stopBatchQuery = async (targetSegment) => {
+  const segment = targetSegment || currentBatchQuerySegment.value
+  if (!segment) return
+  if (batchQueryStopping.value) return // Prevent double-click
+
+  batchQueryStopping.value = true
+  let lastError = null
+  try {
+    for (let attempt = 0; attempt < STOP_MAX_RETRIES; attempt++) {
+      try {
+        const response = await batchQueryAPI.stop(segment)
+        batchQueryTasks.value[segment] = response.data
+        stopBatchQueryPolling()
+        ElMessage.success('一键查询已停止')
+        return
+      } catch (error) {
+        lastError = error
+        // Don't retry if task is already not running (400) or not found (404)
+        const status = error.response?.status
+        if (status === 400 || status === 404) {
+          // Task already stopped/completed/not found - refresh status
+          try {
+            const statusResponse = await batchQueryAPI.getStatus(segment)
+            batchQueryTasks.value[segment] = statusResponse.data
+          } catch (_e) {
+            // Ignore status fetch error
+          }
+          stopBatchQueryPolling()
+          const message = error.response?.data?.message || '任务已不在运行中'
+          ElMessage.info(message)
+          return
+        }
+        if (attempt < STOP_MAX_RETRIES - 1) {
+          await new Promise(resolve => setTimeout(resolve, STOP_RETRY_DELAY))
+        }
+      }
+    }
+
+    // All retries failed - update local state to allow UI to recover
+    const message = lastError?.response?.data?.message || lastError?.message || '停止失败'
+    ElMessage.error(`停止失败: ${message}，请稍后重试`)
+    // Force local status update so user can try again
+    if (batchQueryTasks.value[segment]) {
+      batchQueryTasks.value[segment] = {
+        ...batchQueryTasks.value[segment],
+        status: 'failed'
+      }
+    }
+    stopBatchQueryPolling()
+  } finally {
+    batchQueryStopping.value = false
+  }
+}
+
+// 从表格行直接停止一键查询（带确认）
+const stopBatchQueryFromRow = async (segment) => {
+  if (!segment) return
+  try {
+    await ElMessageBox.confirm(
+      '确定要停止当前一键查询吗？已查询的进度不会丢失。',
+      '确认停止',
+      {
+        confirmButtonText: '确定停止',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+    await stopBatchQuery(segment)
+  } catch (_e) {
+    // User cancelled confirmation
+  }
+}
+
+// 轮询一键查询进度（带错误计数）
+const startBatchQueryPolling = (segment) => {
+  stopBatchQueryPolling()
+  batchQueryPollErrorCount = 0
+  batchQueryPollTimer = setInterval(async () => {
+    try {
+      const response = await batchQueryAPI.getStatus(segment)
+      batchQueryTasks.value[segment] = response.data
+      batchQueryPollErrorCount = 0
+      // Stop polling if task is no longer running
+      if (response.data.status !== 'running') {
+        stopBatchQueryPolling()
+      }
+    } catch (_e) {
+      batchQueryPollErrorCount++
+      if (batchQueryPollErrorCount >= BATCH_QUERY_MAX_POLL_ERRORS) {
+        ElMessage.warning('查询状态获取失败次数过多，已停止自动刷新，请检查网络连接后重新打开对话框')
+        stopBatchQueryPolling()
+      }
+    }
+  }, BATCH_QUERY_POLL_INTERVAL)
+}
+
+const stopBatchQueryPolling = () => {
+  if (batchQueryPollTimer) {
+    clearInterval(batchQueryPollTimer)
+    batchQueryPollTimer = null
+  }
+  batchQueryPollErrorCount = 0
+}
+
+// 对话框关闭时停止对话框轮询（后台轮询继续运行以更新表格按钮进度）
+const onBatchQueryDialogClose = () => {
+  stopBatchQueryPolling()
+  batchQueryStopping.value = false
+}
+
+// 后台轮询：更新所有运行中任务的状态（用于表格按钮进度显示）
+let batchQueryBgPollErrorCount = 0
+
+const startBatchQueryBackgroundPolling = () => {
+  stopBatchQueryBackgroundPolling()
+  batchQueryBgPollErrorCount = 0
+  batchQueryBackgroundPollTimer = setInterval(async () => {
+    try {
+      const response = await batchQueryAPI.getTasks()
+      const tasks = response.data || {}
+      // Merge with existing tasks instead of replacing entirely,
+      // to avoid overwriting foreground polling updates for the active dialog
+      for (const [seg, taskData] of Object.entries(tasks)) {
+        // Only update if foreground polling is NOT active for this segment,
+        // or if the background data is more recent
+        if (seg !== currentBatchQuerySegment.value || !batchQueryPollTimer) {
+          batchQueryTasks.value[seg] = taskData
+        }
+      }
+      batchQueryBgPollErrorCount = 0
+      // 如果没有运行中的任务，自动停止后台轮询
+      const hasRunning = Object.values(tasks).some(t => t.status === 'running')
+      if (!hasRunning) {
+        stopBatchQueryBackgroundPolling()
+      }
+    } catch (_e) {
+      batchQueryBgPollErrorCount++
+      if (batchQueryBgPollErrorCount >= BATCH_QUERY_MAX_POLL_ERRORS) {
+        stopBatchQueryBackgroundPolling()
+      }
+    }
+  }, BATCH_QUERY_POLL_INTERVAL)
+}
+
+const stopBatchQueryBackgroundPolling = () => {
+  if (batchQueryBackgroundPollTimer) {
+    clearInterval(batchQueryBackgroundPollTimer)
+    batchQueryBackgroundPollTimer = null
+  }
+  batchQueryBgPollErrorCount = 0
+}
+
+// 初始化一键查询任务状态
+const initBatchQueryTasks = async () => {
+  try {
+    const response = await batchQueryAPI.getTasks()
+    batchQueryTasks.value = response.data || {}
+    // 如果有运行中的任务，自动开启后台轮询以更新表格按钮进度
+    const hasRunning = Object.values(batchQueryTasks.value).some(t => t.status === 'running')
+    if (hasRunning) {
+      startBatchQueryBackgroundPolling()
+    }
+  } catch (_e) {
+    batchQueryTasks.value = {}
+  }
+}
+
+// 加载服务器数据
+const loadServers = async () => {
+  loading.value = true
+  loadError.value = ''
+  try {
+    const response = await serversAPI.getAll()
+    servers.value = response.data || []
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '网络连接失败'
+    loadError.value = message
+    ElMessage.error(`加载数据失败: ${message}`)
+  } finally {
+    loading.value = false
+  }
+}
+
+// 初始化备注数据（从服务器加载）
+const initSegmentNotes = async () => {
+  try {
+    const response = await preferencesAPI.getSegmentNotes()
+    segmentNotes.value = response.data || {}
+  } catch (_e) {
+    segmentNotes.value = {}
+  }
+}
+
+// 初始化IP检测状态数据（从服务器加载）
+const initIpCheckStatus = async () => {
+  try {
+    const response = await preferencesAPI.getIpCheckStatus()
+    const data = response.data || {}
+    // 转换数据格式以匹配前端期望的格式
+    const converted = {}
+    for (const [ip, status] of Object.entries(data)) {
+      converted[ip] = {
+        portChecked: status.port_checked,
+        pingChecked: status.ping_checked,
+        pingOnline: status.ping_online,
+        port22: status.port_22,
+        port3389: status.port_3389,
+        lastChecked: status.last_checked
+      }
+    }
+    savedIpCheckStatus.value = converted
+  } catch (_e) {
+    savedIpCheckStatus.value = {}
+  }
+}
+
+// 初始化IP的ID结果数据（从服务器加载）
+const initIpIdResults = async () => {
+  try {
+    const response = await preferencesAPI.getIpIdResults()
+    const data = response.data || {}
+    // 转换数据格式以匹配前端期望的格式
+    const converted = {}
+    for (const [ip, result] of Object.entries(data)) {
+      converted[ip] = {
+        idResult: result.id_result,
+        logOutput: result.log_output,
+        lastQueried: result.last_queried
+      }
+    }
+    savedIpIdResults.value = converted
+  } catch (_e) {
+    savedIpIdResults.value = {}
+  }
+}
+
+// 初始化获取服务器任务状态数据（从服务器加载）
+const initFetchServerTasks = async () => {
+  try {
+    const response = await preferencesAPI.getFetchServerTasks()
+    savedFetchServerTasks.value = response.data || {}
+  } catch (_e) {
+    savedFetchServerTasks.value = {}
+  }
+}
+
+onMounted(async () => {
+  const userStr = localStorage.getItem('user')
+  if (userStr) {
+    currentUser.value = JSON.parse(userStr)
+  }
+  await initSegmentNotes()
+  await initIpCheckStatus()
+  await initIpIdResults()
+  await initFetchServerTasks()
+  await initBatchQueryTasks()
+  await loadServers()
+})
+
+onUnmounted(() => {
+  // 清理WebSocket连接（但脚本会在后端继续运行）
+  if (queryIdSocket) {
+    queryIdSocket.disconnect()
+    queryIdSocket = null
+  }
+  if (fetchServerSocket) {
+    fetchServerSocket.disconnect()
+    fetchServerSocket = null
+  }
+  if (subscribeSocket) {
+    subscribeSocket.disconnect()
+    subscribeSocket = null
+  }
+  // 清理一键查询轮询
+  stopBatchQueryPolling()
+  stopBatchQueryBackgroundPolling()
+})
+
+const handleMenuSelect = (index) => {
+  router.push(index)
+}
+
+const handleCommand = async (command) => {
+  if (command === 'changePassword') {
+    passwordForm.old_password = ''
+    passwordForm.new_password = ''
+    passwordForm.confirm_password = ''
+    passwordDialogVisible.value = true
+  } else if (command === 'logout') {
+    try {
+      await authAPI.logout()
+    } catch (_error) {
+      // 忽略登出错误，因为仍然需要清除本地存储
+    }
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    router.push('/login')
+  }
+}
+
+const handleChangePassword = async () => {
+  if (!passwordFormRef.value) return
+  
+  await passwordFormRef.value.validate(async (valid) => {
+    if (valid) {
+      changingPassword.value = true
+      try {
+        await authAPI.changePassword({
+          old_password: passwordForm.old_password,
+          new_password: passwordForm.new_password
+        })
+        ElMessage.success('密码修改成功')
+        passwordDialogVisible.value = false
+      } catch (error) {
+        const message = error.response?.data?.message || '密码修改失败'
+        ElMessage.error(message)
+      } finally {
+        changingPassword.value = false
+      }
+    }
+  })
+}
+</script>
+
+<style scoped>
+/* 页面容器 */
+.page-container {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #f5f7fa 0%, #e4e7ed 100%);
+}
+
+/* 头部样式 - 统一淡蓝色导航 */
+.header-container {
+  background: linear-gradient(135deg, #5b9bd5 0%, #7db8e8 50%, #9ecae1 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-shadow: 0 4px 24px 0 rgba(91, 155, 213, 0.35);
+}
+
+.header-logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-logo h2 {
+  margin: 0;
+  font-weight: 600;
+}
+
+.header-menu {
+  border: none;
+  flex: 1;
+  margin-left: 50px;
+  background: transparent !important;
+}
+
+.header-menu :deep(.el-menu-item) {
+  color: rgba(255, 255, 255, 0.9) !important;
+  font-weight: 500;
+  font-size: 15px;
+  border-radius: 8px;
+  margin: 0 4px;
+  transition: all 0.3s ease;
+}
+
+.header-menu :deep(.el-menu-item:hover) {
+  background: rgba(255, 255, 255, 0.2) !important;
+  color: #fff !important;
+}
+
+.header-menu :deep(.el-menu-item.is-active) {
+  background: rgba(255, 255, 255, 0.25) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 8px rgba(255, 255, 255, 0.2);
+}
+
+/* 子菜单样式 */
+.header-menu :deep(.el-sub-menu__title) {
+  color: rgba(255, 255, 255, 0.9) !important;
+  font-weight: 500;
+  font-size: 15px;
+  border-radius: 8px;
+  margin: 0 4px;
+  transition: all 0.3s ease;
+}
+
+.header-menu :deep(.el-sub-menu__title:hover) {
+  background: rgba(255, 255, 255, 0.2) !important;
+  color: #fff !important;
+}
+
+.header-menu :deep(.el-sub-menu.is-active .el-sub-menu__title) {
+  background: rgba(255, 255, 255, 0.25) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 8px rgba(255, 255, 255, 0.2);
+}
+
+.user-dropdown {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  padding: 10px 15px;
+  color: white;
+  transition: all 0.3s;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.user-dropdown:hover {
+  background-color: rgba(255, 255, 255, 0.25);
+}
+
+/* 主内容区 */
+.main-content {
+  background: transparent;
+}
+
+.content-wrapper {
+  padding: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* 信息卡片 */
+.info-card {
+  border-radius: 16px;
+  box-shadow: 0 4px 20px 0 rgba(0, 0, 0, 0.05);
+  border: none;
+}
+
+.info-card :deep(.el-card__header) {
+  border-bottom: 1px solid #f0f0f0;
+  padding: 20px 24px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.card-header-icon {
+  color: #409EFF;
+}
+
+.card-header-buttons {
+  display: flex;
+  gap: 10px;
+}
+
+.info-content {
+  min-height: 400px;
+}
+
+/* 加载状态 */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  color: #909399;
+}
+
+.loading-icon {
+  color: #409EFF;
+  animation: rotate 1s linear infinite;
+}
+
+@keyframes rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading-text {
+  margin-top: 16px;
+  font-size: 14px;
+  color: #606266;
+}
+
+/* IP段列表 */
+.segment-list {
+  padding: 16px 0;
+}
+
+.segment-stats {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.ip-segment-text {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 15px;
+  font-weight: 600;
+  color: #409EFF;
+}
+
+.status-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.segment-note {
+  color: #606266;
+}
+
+.no-note {
+  color: #c0c4cc;
+  font-style: italic;
+}
+
+.ip-range {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 13px;
+  color: #909399;
+}
+
+/* 分页容器 */
+.pagination-container {
+  display: flex;
+  justify-content: center;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #f0f0f0;
+}
+
+/* IP列表对话框样式 */
+.ip-list-content {
+  padding: 0;
+}
+
+.ip-list-stats {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.ip-list-filter-tag {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.ip-list-filter-tag:hover {
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+
+.ip-list-filter-active {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.ip-address {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.ip-exists {
+  color: #67C23A;
+}
+
+.ip-not-exists {
+  color: #909399;
+}
+
+.ip-note {
+  color: #606266;
+}
+
+.ip-not-exists-note {
+  color: #c0c4cc;
+  font-style: italic;
+}
+
+.ip-list-pagination {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #f0f0f0;
+}
+
+/* 状态单元格样式 */
+.status-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+
+.status-separator {
+  color: #909399;
+  margin: 0 2px;
+}
+
+/* 端口状态单元格样式 */
+.port-status-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.port-text {
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.port-separator {
+  color: #909399;
+  margin: 0 4px;
+}
+
+.port-open-ssh {
+  color: #67C23A;
+  background-color: rgba(103, 194, 58, 0.1);
+}
+
+.port-open-rdp {
+  color: #409EFF;
+  background-color: rgba(64, 158, 255, 0.1);
+}
+
+.port-open-ping {
+  color: #E6A23C;
+  background-color: rgba(230, 162, 60, 0.1);
+}
+
+.port-closed {
+  color: #F56C6C;
+  background-color: rgba(245, 108, 108, 0.1);
+}
+
+.port-unchecked {
+  color: #c0c4cc;
+}
+
+.port-checking {
+  color: #409EFF;
+}
+
+/* ID列样式 */
+.id-result {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 14px;
+  font-weight: 600;
+  color: #67C23A;
+  background-color: rgba(103, 194, 58, 0.1);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.id-unchecked {
+  color: #c0c4cc;
+}
+
+.id-querying {
+  color: #409EFF;
+}
+
+/* 操作按钮容器 */
+.operation-buttons {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* 对话框底部样式 */
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+/* 日志对话框样式 */
+.log-content {
+  max-height: 500px;
+  overflow: auto;
+}
+
+.log-output {
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #303133;
+  background-color: #f5f7fa;
+  padding: 16px;
+  border-radius: 8px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 一键查询相关样式 */
+.segment-operation-buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+}
+
+.batch-query-content {
+  padding: 0;
+}
+
+.batch-query-stats {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.batch-query-log {
+  max-height: 400px;
+  overflow: auto;
+  margin-top: 15px;
+}
+</style>
